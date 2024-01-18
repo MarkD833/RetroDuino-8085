@@ -35,7 +35,7 @@ There are quite a few ROM devices available in a PLCC package as well, but I dec
 
 ## RAM
 
-I couldn't find any suitable RAM devices in PLCC format so the project success was looking rather bleak. Then I discovered that there were some SRAM devices available in DIL packages that were only 0.3in wide. I then got lucky and sourced some UMC 64K x 8 SRAMs in a skinny 32-pin DIL package.
+I couldn't find any suitable RAM devices in PLCC format so the project success was looking rather bleak. Then I discovered that there were some SRAM devices available in DIL packages that were only 0.3in wide. I then got lucky and sourced some UMC UM61512AK 64K x 8 SRAMs in a skinny 32-pin DIL package.
 
 The RAM chip could sit underneath the ROM chip and I would save a lot of board space.
 
@@ -43,7 +43,7 @@ The RAM chip could sit underneath the ROM chip and I would save a lot of board s
 
 I thought about bit banging the serial port using the SID and SOD pins of the 8085 but decided to try and go with real hardware. Again board space was at a premium so the hunt was on for a small UART device. A lot of serial chips have a large number of pins dedicated to various handshaking signals as well as synchronous data transfer - although some devices allow repurposing of these signals as discrete inputs or outputs. They are all still quite large chips in either PLCC or 0.6in DIL packages.
 
-I then discovered a Philips SCC2691 UART that was available in a 0.3in wide 24-pin DIL package. It had an internal baud rate generator and a single 16-bit timer/counter as well. 
+I then discovered a Philips SCC2691 UART (SCC2691AC1N24) that was available in a 0.3in wide 24-pin DIL package. It had an internal baud rate generator and a single 16-bit timer/counter as well. 
 
 ## I/O
 
@@ -51,7 +51,7 @@ I really wanted the I/O chip to have pin programmable direction control. That ru
 
 Except that it wasn't! In my v1.0 design, I couldn't get the Z85C36 to respond at all. I don't know quite what the issue was as I was sure that I was meeting the timing requirements - but clearly something wasn't right.
 
-In order to salvage the situation, I changed the I/O chip to a WDC W65C22 device. The chip still gave me 2x 8-bit bit programmable I/O ports, but only 2x 16-bit timer/counters.
+In order to salvage the situation, I changed the I/O chip to a WDC W65C22S device. The chip still gave me 2x 8-bit bit programmable I/O ports, but only 2x 16-bit timer/counters.
 
 ## Analogue to Digital Converter
 
