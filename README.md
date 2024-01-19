@@ -85,8 +85,20 @@ Finally, the GAL has the ability to completely switch out the ROM to give access
 
 I have 2 pieces of code that run on the RetroDuino-8085.
 
-The first is the excellent 8085 monitor program writting by [Dave Dunfield](https://dunfield.themindfactory.com/). You can find the source code to the 8085 monitor along with monitors for other micros in the MONITORS.ZIP file on Dave's website. This needs tweeking to support the specific hardware it is running on but that simply involves providing code to initialise the UART and code to output a characher/byte as well as read in a character/byte.
+The first is the excellent 8085 monitor program written by [Dave Dunfield](https://dunfield.themindfactory.com/). You can find the source code to the 8085 monitor along with monitors for other micros in the MONITORS.ZIP file on Dave's website. This needs tweeking to support the specific hardware it is running on but that simply involves providing code to initialise the UART and code to output a characher/byte as well as read in a character/byte.
 
 The second in a version of Microsoft BASIC v4.7 which I got from [Phillip Stevens github site](https://github.com/feilipu/NASCOM_BASIC_4.7).
 
-Both pieces of code have been modified to work with the SCC2691 UART.
+Both pieces of code have been modified to work with the SCC2691 UART. I will post them in the code folder once they have been cleaned up along with the GAL equations.
+
+# History
+* v1.2
+  * Used ALE to clock the GAL rather than SYSCLK.
+  * Removed the CompactFlash socket and associated passives.
+  * Used SOD to switch out the ROM.
+  * Addition of 2nd user LED.
+  * Repositioning of the FTDI connector.
+* v1.1 
+  * Updated design using the W65C22 PIA chip.
+* v1.0
+  * Initial design using the Z85C36 CIO chip.
