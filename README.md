@@ -65,3 +65,28 @@ These are the Kicad 3D views of the board as it stands at v1.2.
 | View #1 | View #2 |
 | :---- | :---- |
 | ![](./images/board1.png)| ![](./images/board2.png)|
+
+# The 16V8 GAL
+
+There's so little space on this board that a GAL seemed the logical choice to handle the usual discrete logic. The GAL does address and i/o decoding as follows:
+* Memory space
+ * 0x0000 - 0x3FFF selects the ROM
+ * 0x4000 - 0xFFFF selets the RAM
+* I/O space
+ * 0x00 - 0x3F selects the SCC2692 UART
+ * 0x40 - 0x7F selects the W65C22S digital i/o chip
+ * 0x80 - 0xBF selects the ADC0844 ADC chip
+ 
+In addition, the GAL inverts the SCC2692 and W65C22S interrupt signals.
+
+Finally, the GAL has the ability to completely switch out the ROM to give access to the full 64K or RAM. The 8085 SOD pin is used to control this feature.
+
+# What about some code?
+
+I have 2 pieces of code that run on the RetroDuino-8085.
+
+The first is the excellent 8085 monitor program writting by [Dave Dunfield](https://dunfield.themindfactory.com/). You can find the source code to the 8085 monitor along with monitors for other micros in the MONITORS.ZIP file on Dave's website. This needs tweeking to support the specific hardware it is running on but that simply involves providing code to initialise the UART and code to output a characher/byte as well as read in a character/byte.
+
+The second in a version of Microsoft BASIC v4.7 which I got from [Phillip Stevens github site](https://github.com/feilipu/NASCOM_BASIC_4.7).
+
+Both pieces of code have been modified to work with the SCC2691 UART.
