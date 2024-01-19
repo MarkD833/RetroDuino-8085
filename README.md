@@ -61,10 +61,8 @@ If I could fit it in, then an a National Semiconductor ADC0844 might work out - 
 
 There was quite a bit of massaging to get everything to fit as I also used a GAL16V8 to handle address decoding and interrupt inversion. The result was a board slightly longer than an Arduino UNO (but the same width).
 
-These are the Kicad 3D views of the board as it stands at v1.2.
-| View #1 | View #2 |
-| :---- | :---- |
-| ![](./images/board1.png)| ![](./images/board2.png)|
+This is an annotate 3D view of the board as it stands at v1.2.
+![](./images/board3.png)
 
 # The 16V8 GAL
 
