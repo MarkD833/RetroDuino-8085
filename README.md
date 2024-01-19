@@ -64,16 +64,18 @@ There was quite a bit of massaging to get everything to fit as I also used a GAL
 This is an annotate 3D view of the board as it stands at v1.2.
 ![](./images/board3.png)
 
+The thick white lines on the silkscreen just to the right of the FTDI serial port connector and the ADC0844 chip show the outline of an actual Arduino UNO board.
+
 # The 16V8 GAL
 
 There's so little space on this board that a GAL seemed the logical choice to handle the usual discrete logic. The GAL does address and i/o decoding as follows:
 * Memory space
- * 0x0000 - 0x3FFF selects the ROM
- * 0x4000 - 0xFFFF selets the RAM
+  * 0x0000 - 0x3FFF selects the ROM
+  * 0x4000 - 0xFFFF selets the RAM
 * I/O space
- * 0x00 - 0x3F selects the SCC2692 UART
- * 0x40 - 0x7F selects the W65C22S digital i/o chip
- * 0x80 - 0xBF selects the ADC0844 ADC chip
+  * 0x00 - 0x3F selects the SCC2692 UART
+  * 0x40 - 0x7F selects the W65C22S digital i/o chip
+  * 0x80 - 0xBF selects the ADC0844 ADC chip
  
 In addition, the GAL inverts the SCC2692 and W65C22S interrupt signals.
 
