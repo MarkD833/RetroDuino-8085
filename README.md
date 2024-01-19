@@ -35,7 +35,7 @@ There are quite a few ROM devices available in a PLCC package as well, but I dec
 
 ## RAM
 
-I couldn't find any suitable RAM devices in PLCC format so the project success was looking rather bleak. Then I discovered that there were some SRAM devices available in DIL packages that were only 0.3in wide. I then got lucky and sourced some UMC UM61512AK 64K x 8 SRAMs in a skinny 32-pin DIL package.
+I couldn't find any suitable RAM devices in PLCC format so the project success was looking rather bleak. Then I discovered that there were some SRAM devices available in DIL packages that were only 0.3in wide (called Skinny-DIP if I recall correctly). I then got lucky and sourced some UMC UM61512AK 64K x 8 SRAMs in a skinny 32-pin DIL package.
 
 The RAM chip could sit underneath the ROM chip and I would save a lot of board space.
 
@@ -60,3 +60,8 @@ If I could fit it in, then an a National Semiconductor ADC0844 might work out - 
 # Putting it all together
 
 There was quite a bit of massaging to get everything to fit as I also used a GAL16V8 to handle address decoding and interrupt inversion. The result was a board slightly longer than an Arduino UNO (but the same width).
+
+These are the Kicad 3D views of the board as it stands at v1.2.
+| View #1 | View #2 |
+| :---- | :---- |
+| ![](./images/board1.png)| ![](./images/board2.png)|
