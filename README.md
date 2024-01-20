@@ -81,15 +81,22 @@ In addition, the GAL inverts the SCC2692 and W65C22S interrupt signals.
 
 Finally, the GAL has the ability to completely switch out the ROM to give access to the full 64K or RAM. The 8085 SOD pin is used to control this feature.
 
+The GAL files are in the code folder.
+
 # What about some code?
 
 I have 2 pieces of code that run on the RetroDuino-8085.
 
-The first is the excellent 8085 monitor program written by [Dave Dunfield](https://dunfield.themindfactory.com/). You can find the source code to the 8085 monitor along with monitors for other micros in the MONITORS.ZIP file on Dave's website. This needs tweeking to support the specific hardware it is running on but that simply involves providing code to initialise the UART and code to output a characher/byte as well as read in a character/byte.
+The first is the excellent 8085 monitor program written by [Dave Dunfield](https://dunfield.themindfactory.com/). You can find the source code to the 8085 monitor along with monitors for other micros in the MONITORS.ZIP file on Dave's website. The monitor code needs tweeking to support the specific UART hardware I am using but that simply involves providing code to initialise the UART and code to output a characher/byte as well as read in a character/byte.
 
 The second in a version of Microsoft BASIC v4.7 which I got from [Phillip Stevens github site](https://github.com/feilipu/NASCOM_BASIC_4.7).
 
 Both pieces of code have been modified to work with the SCC2691 UART. I will post them in the code folder once they have been cleaned up along with the GAL equations.
+
+| Software | Notes |
+| :---- | :---- |
+| Mon85_ROM | Monitor runs in ROM and 48K RAM is available from 0x4000 - 0xFFFF. |
+| Mon85_RAM | Monitor runs in RAM and 64K RAM is available but the monitor resides at 0x0000 - 0x1100. |
 
 # History
 * v1.2

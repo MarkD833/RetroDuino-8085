@@ -1,0 +1,2540 @@
+0000                             ; 
+0000                             ; MON85: A software debugger for the 8080/8085 processor
+0000                             ; 
+0000                             ; Copyright 1979-2007 Dave Dunfield
+0000                             ; All rights reserved.
+0000                             ; 
+0000                             ; Version 1.2 - 2012 Roman Borik
+0000                             ; 
+0000                             ; New in version 1.2
+0000                             ; - Support for undocumented 8085 instructions.
+0000                             ;   DSUB B, ARHL, RDEL, LDHI d8, LDSI d8, LHLX D, SHLX D, JNK a16, JK a16, RSTV
+0000                             ; - Command R displays all flags of F register (SZKA3PVC). If flag is not set
+0000                             ;   dash "-" is displayed.
+0000                             ; - Added restart vector RST 8 (0040h) for possibility to handle RSTV call.
+0000                             ; - Changed TRACE mode. After entering TRACE mode, instruction on actual PC and
+0000                             ;   content of registers (if it is switched on) are displayed.
+0000                             ;   Entering a space " " executes this instruction, and returns to the "T>"
+0000                             ;   prompt with the next instruction.
+0000                             ; - Instructions LXI, DAD, INX, DCX displays argument "SP" rather than "S".
+0000                             ; - Commands that requires 1 byte parameter raises error if entered value
+0000                             ;   not fit to 1 byte.
+0000                             ; - Command "C" checks overlap of source and destination block and for copying
+0000                             ;   uses appropriate direction.
+0000                             ; - Command "F" checks <start> and <end> parameters and raises error,
+0000                             ;   if <end> is lower than <start>.
+0000                             ; - Added command "H" to send out memory content in Intel HEX format.
+0000                             ; - Sending of LF and CR characters were reversed and are sent in the usual
+0000                             ;   order - CR first and followed by LF.
+0000                ROM:      EQU   0x0000   ; Debugger goes here
+0000                DRAM:     EQU   0xFFA0   ; Debugger RAM (96 bytes required)
+0000                             ; 
+0000                             ; Debugger data area (in RAM)
+0000                             ; 
+FFA0                          .ORG   DRAM   ; Monitor data goes here
+FFA0                             ; 
+FFA0                UBASE:    DS   2   ; Base address of user program
+FFA2                HL:       DS   2   ; Saved HL register pair
+FFA4                DE:       DS   2   ; Saved DE register pair
+FFA6                BC:       DS   2   ; Saved BC register pair
+FFA8                PSW:      DS   2   ; Saved PSW (A + CC)
+FFAA                SP:       DS   2   ; Saved Stack Pointer
+FFAC                PC:       DS   2   ; Saved Program Counter
+FFAE                OFLAG:    DS   1   ; Output suspended flag
+FFAF                TFLAG:    DS   1   ; Flag to enable TRACING
+FFB0                SFLAG:    DS   1   ; Flag to enable SUBROUTINE tracing
+FFB1                AFLAG:    DS   1   ; Flag to enable AUTO REGISTER DISPLAY
+FFB2                BRKTAB:   DS   24   ; Breakpoint table
+FFCA                INST:     DS   6   ; Save area for "faking" instructions
+FFD0                BUFFER:   DS   48   ; Input/temp buffer & stack
+10000               DSTACK:   EQU   $&0FFFFh   ; Debugger stack
+10000                            ; 
+10000                            ; Startup code... Kick off the monitor
+10000                            ; 
+0000                          .ORG   ROM   ; Debugger code goes here
+0000                             ; 
+0000   31 00 00               LXI   SP,DSTACK   ; Set up initial stack pointer
+0003   C3 0B 01               JMP   TEST   ; Execute main program
+0006                          DS   2   ; Filler bytes to first int
+0008                             ; 
+0008                             ; Interrupt handlers for RESTART interrupts
+0008                             ; 
+0008                             ; Although they RST 1.5, 2.5 and 3.5 vectors are not used by the
+0008                             ; 8085 hardware,  they are included since the space must contain
+0008                             ; SOMETHING,  and who knows,  perhaps someone uses them for jump
+0008                             ; table addresses etc...
+0008                             ; 
+0008                             ; Restart 1 is the entry point for breakpoints
+0008   C3 5A 00     RST1:     JMP   ENTRY   ; Execute handler
+000B                          DS   1   ; Filler to next int
+000C   CD 44 00     RST15:    CALL   RSTINT   ; Invoke interrupt
+000F   0C                     DB   12   ; Offset to handler
+0010   CD 44 00     RST2:     CALL   RSTINT   ; Invoke interrupt
+0013   10                     DB   16   ; Offset to handler
+0014   CD 44 00     RST25:    CALL   RSTINT   ; Invoke interrupt
+0017   14                     DB   20   ; Offset to handler
+0018   CD 44 00     RST3:     CALL   RSTINT   ; Invoke interrupt
+001B   18                     DB   24   ; Offset to handler
+001C   CD 44 00     RST35:    CALL   RSTINT   ; Invoke interrupt
+001F   1C                     DB   28   ; Offset to handler
+0020   CD 44 00     RST4:     CALL   RSTINT   ; Invoke interrupt
+0023   20                     DB   32   ; Offset to handler
+0024   CD 44 00     TRAP:     CALL   RSTINT   ; Invoke interrupt
+0027   24                     DB   36   ; Offset to handler
+0028   CD 44 00     RST5:     CALL   RSTINT   ; Invoke interrupt
+002B   28                     DB   40   ; Offset to handler
+002C   CD 44 00     RST55:    CALL   RSTINT   ; Invoke interrupt
+002F   2C                     DB   44   ; Offset to handler
+0030   CD 44 00     RST6:     CALL   RSTINT   ; Invoke interrupt
+0033   30                     DB   48   ; Offset to handler
+0034   CD 44 00     RST65:    CALL   RSTINT   ; Invoke interrupt
+0037   34                     DB   52   ; Offset to handler
+0038   CD 44 00     RST7:     CALL   RSTINT   ; Invoke interrupt
+003B   38                     DB   56   ; Offset to handler
+003C   CD 44 00     RST75:    CALL   RSTINT   ; Invoke interrupt
+003F   3C                     DB   60   ; Offset to handler
+0040   CD 44 00     RST8:     CALL   RSTINT   ; Invoke interrupt
+0043   40                     DB   64   ; Offset to handler
+0044                             ; 
+0044                             ; Process a RESTART interrupt, get offset & vector to code
+0044                             ; To speed processing, it is assumed that the user program
+0044                             ; base address begins on a 256 byte page boundary.
+0044                             ; 
+0044   E3           RSTINT:   XTHL      ; Save HL, Get PTR to offset
+0045   F5                     PUSH   PSW   ; Save A and CC
+0046   7E                     MOV   A,M   ; Get offset
+0047   2A A0 FF               LHLD   UBASE   ; Get high of user program
+004A   6F                     MOV   L,A   ; Set low address
+004B   F1                     POP   PSW   ; Restore A & CC
+004C   E3                     XTHL      ; Restore HL, set
+004D   C9                     RET      ; Vector to interrupt
+004E                             ; 
+004E                             ; Register -> text translation tables used by the disassembler. These tables
+004E                             ; go here (near beginning) so that we can be sure the high address will not
+004E                             ; cross a page boundary allowing us to index by modifying low address only.
+004E                             ; 
+004E   42 43 44 45 48 4C 4D 41 RTAB:   DB   "BCDEHLMA"   ; Table of register names
+0056   42 44 48 53  RPTAB:    DB   "BDHS"   ; Table of register pairs
+005A                             ; 
+005A                             ; Entry point for breakpoints & program tracing
+005A                             ; 
+005A                             ; Save the user program registers
+005A   22 A2 FF     ENTRY:    SHLD   HL   ; Save HL
+005D   EB                     XCHG      ; Get DE
+005E   22 A4 FF               SHLD   DE   ; Save DE
+0061   E1                     POP   H   ; Get RET addrss
+0062   22 AC FF               SHLD   PC   ; Save PC
+0065   C5                     PUSH   B   ; Copy BC
+0066   E1                     POP   H   ; And get it
+0067   22 A6 FF               SHLD   BC   ; Save PC
+006A   F5                     PUSH   PSW   ; Copy PSW
+006B   E1                     POP   H   ; And get it
+006C   22 A8 FF               SHLD   PSW   ; Save PSW
+006F   21 00 00               LXI   H,0   ; Start with zero
+0072   39                     DAD   SP   ; Get SP
+0073   22 AA FF               SHLD   SP   ; Save SP
+0076   31 00 00               LXI   SP,DSTACK   ; Move to our stack
+0079   2A AC FF               LHLD   PC   ; Get RET addrss
+007C   2B                     DCX   H   ; Backup to actual instruction
+007D   22 AC FF               SHLD   PC   ; Save PC
+0080   11 B2 FF               LXI   D,BRKTAB   ; Point to breakpoint table
+0083   06 30                  MVI   B,"0"   ; Assume breakpoint #0
+0085                             ; Search breakpoint table & see if this is a breakpoint
+0085   1A           TRYBRK:   LDAX   D   ; Get HIGH byte from table
+0086   13                     INX   D   ; Advance
+0087   BC                     CMP   H   ; Does it match?
+0088   1A                     LDAX   D   ; Get LOW byte from table
+0089   13                     INX   D   ; Advance
+008A   C2 91 00               JNZ   NOTBRK   ; No, try next
+008D   BD                     CMP   L   ; Does it match?
+008E   CA 9C 00               JZ   FOUND   ; Yes, we have an entry
+0091   13           NOTBRK:   INX   D   ; Skip saved code byte
+0092   04                     INR   B   ; Advance breakpoint number
+0093   78                     MOV   A,B   ; Get breakpoint number
+0094   FE 38                  CPI   "0"+8   ; Table exausted
+0096   DA 85 00               JC   TRYBRK   ; No, keep looking
+0099                             ; This interrupt is NOT a breakpoint
+0099   C3 B5 00               JMP   NOBK   ; Enter with no breakpoint
+009C                             ; This interrupt is a breakpoint, display the message
+009C   CD 58 0F     FOUND:    CALL   PRTMSG   ; Output message
+009F   2A 2A 20 42 72 65 61 6B 70 6F 69 6E 74 20 00 DB   "** Breakpoint ",0   
+00AE   78                     MOV   A,B   ; Get breakpoint number
+00AF   CD AA 0F               CALL   OUT   ; Output it
+00B2   CD A3 0F               CALL   CRLF   ; New line
+00B5                             ; Reenter monitor, first, restore all breakpoint opcodes
+00B5   21 B2 FF     NOBK:     LXI   H,BRKTAB   ; Point to breakpoint table
+00B8   06 08                  MVI   B,8   ; 8 breakpoints
+00BA   56           FIXL:     MOV   D,M   ; Get HIGH address
+00BB   23                     INX   H   ; Advance
+00BC   5E                     MOV   E,M   ; Get LOW address
+00BD   23                     INX   H   ; Advance
+00BE   7A                     MOV   A,D   ; Get high
+00BF   B3                     ORA   E   ; Test for ZERO
+00C0   CA C5 00               JZ   NOFIX   ; Breakpoint is not set
+00C3   7E                     MOV   A,M   ; Get opcode
+00C4   12                     STAX   D   ; And patch user code
+00C5   23           NOFIX:    INX   H   ; Skip opcode
+00C6   05                     DCR   B   ; Reduce count
+00C7   C2 BA 00               JNZ   FIXL   ; Not finished, keep going
+00CA   3A AF FF               LDA   TFLAG   ; Get trace mode flag
+00CD   A7                     ANA   A   ; Is it enabled?
+00CE   C2 DB 00               JNZ   TRTB   ; Yes, enter trace mode
+00D1   3A B1 FF               LDA   AFLAG   ; Get auto register display flag
+00D4   A7                     ANA   A   ; Is it enabled?
+00D5   C4 13 08               CNZ   REGDIS   ; Yes, display the registers
+00D8   C3 8D 01               JMP   REST   ; Enter monitor
+00DB                             ; Prompt for and handle trace mode commands
+00DB   CD 58 0F     TRTB:     CALL   PRTMSG   ; Output message
+00DE   54 3E 20 00            DB   "T> ",0   ; Trace mode prompt
+00E2   2A AC FF               LHLD   PC   ; Get PC
+00E5   EB                     XCHG      ; Move to DE
+00E6   CD AA 08               CALL   DINST   ; Disassemble the instruction
+00E9   CD A3 0F               CALL   CRLF   ; New line
+00EC   3A B1 FF               LDA   AFLAG   ; Get auto register display flag
+00EF   A7                     ANA   A   ; Is it enabled?
+00F0   C4 13 08               CNZ   REGDIS   ; Yes, display the registers
+00F3   CD 38 0F     TRL:      CALL   INCHR   ; Get a command character
+00F6   FE 20                  CPI   " "   ; Execute command?
+00F8   CA 0A 03               JZ   NOADR   ; Yes, handle it
+00FB   FE 1B                  CPI   1Bh   ; ESCAPE?
+00FD   CA 8A 01               JZ   RECR   ; Yes, abort
+0100   FE 3F                  CPI   "?"   ; Register display?
+0102   C2 F3 00               JNZ   TRL   ; No, ignore it
+0105   CD 13 08               CALL   REGDIS   ; Display the registers
+0108   C3 DB 00               JMP   TRTB   ; And go again
+010B                             ; 
+010B                             ; Main entry point for the 8080 debugger
+010B                             ; 
+010B   CD BE 0F     TEST:     CALL   INIT   ; Set up hardware
+010E   CD 58 0F               CALL   PRTMSG   ; Output herald message
+0111   0D 0A                  DB   0Dh,0Ah   
+0113   4D 4F 4E 38 35 20 56 65 72 73 69 6F 6E 20 31 2E 32 DB   "MON85 Version 1.2"   
+0124   0D 0A 0A               DB   0Dh,0Ah,0Ah   
+0127   43 6F 70 79 72 69 67 68 74 20 31 39 37 39 2D 32 30 30 37 20 44 61 76 65 20 44 75 6E 66 69 65 6C 64 DB   "Copyright 1979-2007 Dave Dunfield"   
+0148   0D 0A                  DB   0Dh,0Ah   
+014A   32 30 31 32 20 52 6F 6D 61 6E 20 42 6F 72 69 6B DB   "2012 Roman Borik"   
+015A   0D 0A                  DB   0Dh,0Ah   
+015C   41 6C 6C 20 72 69 67 68 74 73 20 72 65 73 65 72 76 65 64 2E DB   "All rights reserved."   
+0170   0A 00                  DB   0Ah,0   
+0172   21 A0 FF               LXI   H,UBASE   ; Point to start of reserved RAM
+0175   0E 60                  MVI   C,(DSTACK-UBASE)&0FFh   ; Number of bytes to zero
+0177   36 00        INIL1:    MVI   M,0   ; Clear a byte
+0179   23                     INX   H   ; Advance
+017A   0D                     DCR   C   ; Reduce count
+017B   C2 77 01               JNZ   INIL1   ; Clear em all
+017E   21 FF FF               LXI   H,0FFFFh   ; Set flags
+0181   22 B0 FF               SHLD   SFLAG   ; Turn on SUBTRACE & AUTOREG
+0184   21 A0 FF               LXI   H,UBASE   ; Default user stack (below monitor RAM)
+0187   22 AA FF               SHLD   SP   ; Set user SP
+018A                             ; Newline and prompt for command
+018A   CD A3 0F     RECR:     CALL   CRLF   ; Output a newline
+018D                             ; Prompt for an input command
+018D   31 00 00     REST:     LXI   SP,DSTACK   ; Reset stack pointer
+0190   CD 58 0F               CALL   PRTMSG   ; Output message
+0193   43 3E 20 00            DB   "C> ",0   ; Command prompt
+0197   CD 67 07               CALL   INPT   ; Get command character
+019A                             ; Look up command in table
+019A   47                     MOV   B,A   ; Save for later
+019B   21 BB 01               LXI   H,CTABLE   ; Point to command table
+019E   7E           REST1:    MOV   A,M   ; Get char
+019F   23                     INX   H   ; Advance
+01A0   B8                     CMP   B   ; Do it match?
+01A1   CA B2 01               JZ   REST2   ; Yes, go for it
+01A4   23                     INX   H   ; Skip HIGH address
+01A5   23                     INX   H   ; Skip LOW address
+01A6   A7                     ANA   A   ; end of table?
+01A7   C2 9E 01               JNZ   REST1   ; Its OK
+01AA                             ; Error has occured, issue message & return for command
+01AA   3E 3F        ERROR:    MVI   A,"?"   ; Error indicator
+01AC   CD AA 0F               CALL   OUT   ; Display
+01AF   C3 8A 01               JMP   RECR   ; And wait for command
+01B2                             ; We have command, execute it
+01B2   13           REST2:    INX   D   ; Skip command character
+01B3   7E                     MOV   A,M   ; Get low address
+01B4   23                     INX   H   ; Skip to next
+01B5   66                     MOV   H,M   ; Get HIGH address
+01B6   6F                     MOV   L,A   ; Set LOW
+01B7   CD B0 07               CALL   SKIP   ; Set "Z" of no operands
+01BA   E9                     PCHL      ; And execute
+01BB                             ; Table of commands to execute
+01BB   41           CTABLE:   DB   "A"   ; Set AUTOREG flag
+01BC   BD 04                  DW   AUTO   
+01BE   42                     DB   "B"   ; Set/Display breakpoint
+01BF   5E 02                  DW   SETBRK   
+01C1   43                     DB   "C"   ; Copy memory
+01C2   42 05                  DW   COPY   
+01C4   44                     DB   "D"   ; Disassemble
+01C5   BD 05                  DW   GODIS   
+01C7   45                     DB   "E"   ; Edit memory
+01C8   D8 04                  DW   EDIT   
+01CA   46                     DB   "F"   ; Fill memory
+01CB   1C 05                  DW   FILL   
+01CD   47                     DB   "G"   ; Go (begin execution)
+01CE   FA 02                  DW   GO   
+01D0   48                     DB   "H"   ; Send out memory as Intel HEX
+01D1   ED 05                  DW   SNDHEX   
+01D3   49                     DB   "I"   ; Input from port
+01D4   29 02                  DW   INPUT   
+01D6   4C                     DB   "L"   ; Load from serial port
+01D7   61 06                  DW   LOAD   
+01D9   4D                     DB   "M"   ; Memory display
+01DA   7B 05                  DW   MEMRY   
+01DC   4F                     DB   "O"   ; Output to port
+01DD   48 02                  DW   OUTPUT   
+01DF   52                     DB   "R"   ; Set/Display Registers
+01E0   40 04                  DW   REGIST   
+01E2   53                     DB   "S"   ; Set SUBTRACE flag
+01E3   C6 04                  DW   SUBON   
+01E5   54                     DB   "T"   ; Set TRACE mode
+01E6   CF 04                  DW   TRACE   
+01E8   55                     DB   "U"   ; Set/Display user base
+01E9   CF 05                  DW   USRBASE   
+01EB   3F                     DB   "?"   ; Help command
+01EC   F1 01                  DW   HELP   
+01EE   00                     DB   0   ; End of table
+01EF   8D 01                  DW   REST   ; Handle NULL command
+01F1                             ; 
+01F1                             ; Help command
+01F1                             ; 
+01F1   21 BB 0C     HELP:     LXI   H,HTEXT   ; Point to help text
+01F4   97                     SUB   A   ; Get a zero
+01F5   32 AE FF               STA   OFLAG   ; Clear the output flag
+01F8                             ; Output each line
+01F8   0E 19        HELP1:    MVI   C,25   ; Column counter
+01FA   7E           HELP2:    MOV   A,M   ; Get character
+01FB   23                     INX   H   ; Advance to next
+01FC   A7                     ANA   A   ; End of line?
+01FD   CA 1E 02               JZ   HELP4   ; Yes, terminate
+0200   FE 21                  CPI   "!"   ; Separator?
+0202   CA 0C 02               JZ   HELP3   ; Yes, output
+0205   CD AA 0F               CALL   OUT   ; Write character
+0208   0D                     DCR   C   ; Reduce count
+0209   C3 FA 01               JMP   HELP2   ; Keep going
+020C                             ; Fill with spaces to discription column
+020C   CD 9B 08     HELP3:    CALL   SPACE   ; Output a space
+020F   0D                     DCR   C   ; Reduce count
+0210   C2 0C 02               JNZ   HELP3   ; Do them all
+0213   3E 2D                  MVI   A,"-"   ; Spperator
+0215   CD AA 0F               CALL   OUT   ; Display
+0218   CD 9B 08               CALL   SPACE   ; And space over
+021B   C3 FA 01               JMP   HELP2   ; Output rest of line
+021E                             ; End of line encountered...
+021E   CD 67 0F     HELP4:    CALL   CHKSUS   ; New line
+0221   7E                     MOV   A,M   ; Get next byte
+0222   A7                     ANA   A   ; End of text?
+0223   C2 F8 01               JNZ   HELP1   ; Do them all
+0226   C3 8A 01               JMP   RECR   ; And go home
+0229                             ; 
+0229                             ; Input from port
+0229                             ; 
+0229   CD CC 07     INPUT:    CALL   CALC8   ; Get port number
+022C   3E DB                  MVI   A,0DBh   ; "IN" instruction
+022E   26 C9                  MVI   H,0C9h   ; "RET" instruction
+0230   32 CA FF               STA   INST   ; Set RAM instruction
+0233   22 CB FF               SHLD   INST+1   ; Set RAM instruction
+0236   CD 58 0F               CALL   PRTMSG   ; Output message
+0239   44 41 54 41 3D 00      DB   "DATA=",0   
+023F   CD CA FF               CALL   INST   ; Perform the read
+0242   CD 45 0F               CALL   HPR   ; Output it
+0245   C3 8A 01               JMP   RECR   ; Newline & EXIT
+0248                             ; 
+0248                             ; Output to port
+0248                             ; 
+0248   CD CC 07     OUTPUT:   CALL   CALC8   ; Get port number
+024B   3E D3                  MVI   A,0D3h   ; "OUT" instruction
+024D   26 C9                  MVI   H,0C9h   ; "RET" instruction
+024F   32 CA FF               STA   INST   ; Set RAM instruction
+0252   22 CB FF               SHLD   INST+1   ; Set RAM instruction
+0255   CD CC 07               CALL   CALC8   ; Get data byte
+0258   CD CA FF               CALL   INST   ; Output the data
+025B   C3 8D 01               JMP   REST   ; Back to command prompt
+025E                             ; 
+025E                             ; Set breakpoint command
+025E                             ; 
+025E   CA 83 02     SETBRK:   JZ   DISBRK   ; No operands, display breakpoints
+0261                             ; Set a breakpoint
+0261   CD CC 07               CALL   CALC8   ; Get hex operand
+0264   FE 08                  CPI   8   ; In range?
+0266   D2 AA 01               JNC   ERROR   ; No, invalud
+0269   21 AF FF               LXI   H,BRKTAB-3   ; Point to breakpoint table
+026C   01 03 00               LXI   B,3   ; Offset for a breakpoint
+026F   09           SBRLP:    DAD   B   ; Advance to next breakpoint
+0270   3D                     DCR   A   ; Reduce count
+0271   F2 6F 02               JP   SBRLP   ; Go until we are there
+0274   E5                     PUSH   H   ; Save table address
+0275   CD D6 07               CALL   CALC   ; Get address
+0278   D1                     POP   D   ; Restore address
+0279   EB                     XCHG      ; D=brkpt address, H=table address
+027A   72                     MOV   M,D   ; Set HIGH address in table
+027B   23                     INX   H   ; Advance
+027C   73                     MOV   M,E   ; Set LOW address in table
+027D   23                     INX   H   ; Advance
+027E   1A                     LDAX   D   ; Get opcode from memory
+027F   77                     MOV   M,A   ; Save in table
+0280   C3 8D 01               JMP   REST   ; And get next command
+0283                             ; Display breakpoints
+0283   11 B2 FF     DISBRK:   LXI   D,BRKTAB   ; Point to breakpoint table
+0286   06 30                  MVI   B,"0"   ; Begin with breakpoint zero
+0288   3E 42        DISLP:    MVI   A,"B"   ; Lead in character
+028A   CD AA 0F               CALL   OUT   ; Output
+028D   78                     MOV   A,B   ; Get breakpoint number
+028E   CD AA 0F               CALL   OUT   ; Output
+0291   3E 3D                  MVI   A,"="   ; Seperator character
+0293   CD AA 0F               CALL   OUT   ; Output
+0296   1A                     LDAX   D   ; Get HIGH address
+0297   67                     MOV   H,A   ; Copy
+0298   13                     INX   D   ; Advance
+0299   1A                     LDAX   D   ; Get LOW address
+029A   6F                     MOV   L,A   ; Copy
+029B   B4                     ORA   H   ; Is breakpoint set?
+029C   CA A5 02               JZ   NOTSET   ; No, don't display
+029F   CD 40 0F               CALL   HLOUT   ; Output in hex
+02A2   C3 AD 02               JMP   GIVLF   ; And proceed
+02A5                             ; Breakpoint is not set
+02A5   CD 58 0F     NOTSET:   CALL   PRTMSG   ; Output message
+02A8   2A 2A 2A 2A 00         DB   "****",0   ; Indicate not set
+02AD   3E 20        GIVLF:    MVI   A," "   ; Get a space
+02AF   CD AA 0F               CALL   OUT   ; Output
+02B2   CD AA 0F               CALL   OUT   ; Output
+02B5   78                     MOV   A,B   ; Get breakpoint address
+02B6   FE 33                  CPI   "0"+3   ; Halfway through?
+02B8   CC A3 0F               CZ   CRLF   ; Yes, new line
+02BB   13                     INX   D   ; Skip low byte
+02BC   13                     INX   D   ; Skip opcode
+02BD   04                     INR   B   ; Advance breakpoint number
+02BE   78                     MOV   A,B   ; Get number again
+02BF   FE 38                  CPI   "0"+8   ; All done?
+02C1   DA 88 02               JC   DISLP   ; No, keep going
+02C4   CD A3 0F               CALL   CRLF   ; New line
+02C7   21 9F 0C               LXI   H,AUTMSG   ; Message for AFLAG
+02CA   3A B1 FF               LDA   AFLAG   ; Get flag state
+02CD   CD E8 02               CALL   DISON   ; Display ON/OFF indication
+02D0   21 A8 0C               LXI   H,SUBMSG   ; Message for SFLAG
+02D3   3A B0 FF               LDA   SFLAG   ; Get flag state
+02D6   CD E8 02               CALL   DISON   ; Display ON/OFF indication
+02D9   21 B3 0C               LXI   H,TRCMSG   ; Message for TFLAG
+02DC   3A AF FF               LDA   TFLAG   ; Get flag state
+02DF   CD E8 02               CALL   DISON   ; Display ON/OFF indication
+02E2   CD A3 0F               CALL   CRLF   ; New line
+02E5   C3 8D 01               JMP   REST   ; Back for another command
+02E8                             ; Display ON/OFF flag state
+02E8   F5           DISON:    PUSH   PSW   ; Save A
+02E9   CD 5D 0F               CALL   PRTSTR   ; Output message
+02EC   F1                     POP   PSW   ; Restore A
+02ED   21 9B 0C               LXI   H,OFF   ; Assume OFF
+02F0   A7                     ANA   A   ; Test A
+02F1   CA 5D 0F               JZ   PRTSTR   ; Yes, display OFF
+02F4   21 97 0C               LXI   H,ON   ; Convert to ON
+02F7   C3 5D 0F               JMP   PRTSTR   ; And display ON
+02FA                             ; 
+02FA                             ; GO command, Begin program execution
+02FA                             ; 
+02FA   CA 03 03     GO:       JZ   NOHEX   ; Address not given, assume default
+02FD   CD D6 07               CALL   CALC   ; Get argument
+0300   22 AC FF               SHLD   PC   ; Save new PC value
+0303   3A AF FF     NOHEX:    LDA   TFLAG   ; Get trace flag
+0306   A7                     ANA   A   ; Enabled?
+0307   C2 DB 00               JNZ   TRTB   ; Yes, wait for prompt
+030A                             ; Single-step one instruction...
+030A                             ; Used for first instruction even when NOT tracing, so
+030A                             ; that we can insert breakpoints
+030A   97           NOADR:    SUB   A   ; Get NOP
+030B   67                     MOV   H,A   ; Set high
+030C   6F                     MOV   L,A   ; Set LOW
+030D   32 CA FF               STA   INST   ; Set first byte
+0310   22 CB FF               SHLD   INST+1   ; Set second & third
+0313   2A AC FF               LHLD   PC   ; Get PC
+0316   EB                     XCHG      ; Set DE to PC
+0317   CD 37 09               CALL   LOOK   ; Lookup instruction
+031A   47                     MOV   B,A   ; Save the TYPE/LENGTH byte
+031B   E6 03                  ANI   03h   ; Mask TYPE, save LENGTH
+031D   4F                     MOV   C,A   ; Save for count
+031E                             ; Copy instruction into "faking" area
+031E   21 CA FF               LXI   H,INST   ; Point to saved instruction
+0321   1A           GOSET:    LDAX   D   ; Get byte from code
+0322   77                     MOV   M,A   ; Save in instruction
+0323   23                     INX   H   ; Advance output
+0324   13                     INX   D   ; Advance input
+0325   0D                     DCR   C   ; Reduce count
+0326   C2 21 03               JNZ   GOSET   ; Copy it all
+0329   EB                     XCHG      ; HL = addrss to execute
+032A   3E C3                  MVI   A,0C3h   ; Get a JMP instruction
+032C   32 CD FF               STA   INST+3   ; Set up a JUMP instruction
+032F   22 CE FF               SHLD   INST+4   ; Set target address
+0332   3A AF FF               LDA   TFLAG   ; Get trace flag
+0335   A7                     ANA   A   ; Are we tracing?
+0336   CA 0A 04               JZ   NOTRC   ; No, we are not
+0339   C5                     PUSH   B   ; Save TYPE/LENGTH
+033A   2A CE FF               LHLD   INST+4   ; Get termination address
+033D   23                     INX   H   ; Skip this one
+033E   22 D0 FF               SHLD   BUFFER   ; Save for "fake" handling
+0341   21 38 04               LXI   H,FAKE   ; Point to FAKE routine
+0344   22 CE FF               SHLD   INST+4   ; Save new addres
+0347   C1                     POP   B   ; Restore TYPE/LENGTH
+0348                             ; Simulate any control transfer instruction
+0348   3A CA FF               LDA   INST   ; Get instruction
+034B   FE E9                  CPI   0E9h   ; Is it PCHL?
+034D   C2 56 03               JNZ   NOPCHL   ; No, skip
+0350   2A A2 FF               LHLD   HL   ; Get user HL value
+0353   C3 FD 03               JMP   HLJMP   ; And simulate a jump
+0356   FE CB        NOPCHL:   CPI   0CBh   ; Is it RSTV?
+0358   C2 69 03               JNZ   NORSTV   ; No, skip
+035B   3A A8 FF               LDA   PSW   ; Get status flags
+035E   E6 02                  ANI   2   ; Check V flag
+0360   C2 0A 04               JNZ   NOTRC   ; Is set, execute instruction
+0363   32 CA FF               STA   INST   ; Change to NOP
+0366   C3 0A 04               JMP   NOTRC   ; Not set, execute NOP
+0369   FE DD        NORSTV:   CPI   0DDh   ; Is it JNK?
+036B   CA 73 03               JZ   JNKJK   ; Yes, go
+036E   FE FD                  CPI   0FDh   ; Is it JK?
+0370   C2 82 03               JNZ   NOJNK   ; No, skip
+0373   E6 20        JNKJK:    ANI   20h   ; Save K flag from instruction code
+0375   4F                     MOV   C,A   
+0376   3A A8 FF               LDA   PSW   ; Get status flags
+0379   E6 20                  ANI   20h   ; Save only K flag
+037B   A9                     XRA   C   ; Compare them
+037C   CA EC 03               JZ   NOPSH   ; If they are equal, make jump
+037F   C3 0A 04               JMP   NOTRC   ; No jump
+0382   78           NOJNK:    MOV   A,B   ; Get TYPE back
+0383   FE 0B                  CPI   0Bh   ; Is it a "JUMP"
+0385   CA C7 03               JZ   GOJMP   ; Yes, handle it
+0388   FE 05                  CPI   05h   ; Is it a "RETURN"
+038A   CA F2 03               JZ   CALRET   ; Yes, handle it
+038D   E6 F8                  ANI   0F8h   ; Save only conditional bits
+038F   CA 0A 04               JZ   NOTRC   ; Not conditional, always execute instruction
+0392   E6 08                  ANI   08h   ; Does this test require COMPLEMENTED flags
+0394   3A A8 FF               LDA   PSW   ; Get status flags
+0397   CA 9B 03               JZ   NOCOM   ; No need to complement
+039A   2F                     CMA      ; Invert for NOT tests
+039B   4F           NOCOM:    MOV   C,A   ; Save PSW bits
+039C   78                     MOV   A,B   ; Get conditon back
+039D   17                     RAL      ; Is it SIGN flag?
+039E   DA AF 03               JC   SIGN   ; Yes, handle it
+03A1   17                     RAL      ; Is it ZERO flag?
+03A2   DA B5 03               JC   ZERO   ; Yes, handle it
+03A5   17                     RAL      ; Is it PARITY flag?
+03A6   DA BB 03               JC   PARITY   ; Yes, handle it
+03A9                             ; This instruction is conditional on the CARRY flag
+03A9   79           CARRY:    MOV   A,C   ; Get flag bits
+03AA   E6 01                  ANI   01h   ; Test CARRY flag
+03AC   C3 BE 03               JMP   ENFLG   ; And proceed
+03AF                             ; This instruction is conditional on the SIGN flag
+03AF   79           SIGN:     MOV   A,C   ; Get flag bits
+03B0   E6 80                  ANI   80h   ; Test SIGN flag
+03B2   C3 BE 03               JMP   ENFLG   ; And proceed
+03B5                             ; This instruction is conditional on the ZERO flag
+03B5   79           ZERO:     MOV   A,C   ; Get flag bits
+03B6   E6 40                  ANI   40h   ; Test ZERO flag
+03B8   C3 BE 03               JMP   ENFLG   ; And proceed
+03BB                             ; This instruction is conditional on the PARITY flag
+03BB   79           PARITY:   MOV   A,C   ; Get flag bits
+03BC   E6 04                  ANI   04h   ; Test PARITY flag
+03BE                             ; Execute conditional instruction
+03BE   CA 0A 04     ENFLG:    JZ   NOTRC   ; Not executed
+03C1   78                     MOV   A,B   ; Get type back
+03C2   E6 04                  ANI   04h   ; Is it JUMP
+03C4   C2 F2 03               JNZ   CALRET   ; No, try next
+03C7                             ; Simulate a JUMP instruction
+03C7   3A CA FF     GOJMP:    LDA   INST   ; Get instruction
+03CA   FE CD                  CPI   0CDh   ; Is it a CALL
+03CC   CA D6 03               JZ   PADR   ; Yes
+03CF   E6 C7                  ANI   0C7h   ; Mask conditional
+03D1   FE C4                  CPI   0C4h   ; Conditional call?
+03D3   C2 EC 03               JNZ   NOPSH   ; No, its a jump
+03D6                             ; Simulate a subroutine trace
+03D6   3A B0 FF     PADR:     LDA   SFLAG   ; Get subroutine tracing flag
+03D9   A7                     ANA   A   ; Is it set?
+03DA   CA 0A 04               JZ   NOTRC   ; No, simulate as one instruction
+03DD   2A D0 FF               LHLD   BUFFER   ; Get termination address
+03E0   2B                     DCX   H   ; Backup
+03E1   EB                     XCHG      ; D = address
+03E2   2A AA FF               LHLD   SP   ; Get user SP
+03E5   2B                     DCX   H   ; Backup
+03E6   72                     MOV   M,D   ; Set HIGH return address
+03E7   2B                     DCX   H   ; Backup
+03E8   73                     MOV   M,E   ; Set LOW return address
+03E9   22 AA FF               SHLD   SP   ; Resave user SP
+03EC                             ; Continue simulation of a JUMP type instruction
+03EC   2A CB FF     NOPSH:    LHLD   INST+1   ; Get target address
+03EF   C3 FD 03               JMP   HLJMP   ; And proceed
+03F2                             ; Handle simulation of RETURN instruction
+03F2   2A AA FF     CALRET:   LHLD   SP   ; Get sser SP
+03F5   5E                     MOV   E,M   ; Get LOW return address
+03F6   23                     INX   H   ; Advance
+03F7   56                     MOV   D,M   ; Get HIGH return address
+03F8   23                     INX   H   ; Advance
+03F9   22 AA FF               SHLD   SP   ; Resave user SP
+03FC   EB                     XCHG      ; Set HL = address
+03FD                             ; Simulate a jump to the address in HL
+03FD   23           HLJMP:    INX   H   ; Advance
+03FE   22 D0 FF               SHLD   BUFFER   ; Save new target address
+0401   97                     SUB   A   ; Get NOP
+0402   67                     MOV   H,A   ; Set HIGH
+0403   6F                     MOV   L,A   ; Set LOW
+0404   32 CA FF               STA   INST   ; NOP first byte
+0407   22 CB FF               SHLD   INST+1   ; NOP second byte
+040A                             ; Dispatch the user program
+040A                             ; First, insert any breakpoints into the object code
+040A   11 B2 FF     NOTRC:    LXI   D,BRKTAB   ; Point to breakpoint table
+040D   0E 08                  MVI   C,8   ; Size of table (in entries)
+040F   1A           RESBP:    LDAX   D   ; Get a HIGH address
+0410   67                     MOV   H,A   ; Save for later
+0411   13                     INX   D   ; Advance
+0412   1A                     LDAX   D   ; Get low address
+0413   6F                     MOV   L,A   ; Save for later
+0414   13                     INX   D   ; Advance
+0415   B4                     ORA   H   ; Is breakpoint enabled?
+0416   CA 1B 04               JZ   NORES   ; No, its not
+0419   36 CF                  MVI   M,0CFh   ; Set up a RST 1 breakpoint
+041B   13           NORES:    INX   D   ; Skip opcode
+041C   0D                     DCR   C   ; Reduce count
+041D   C2 0F 04               JNZ   RESBP   ; Do them all
+0420                             ; Restore the user applications registers
+0420   2A AA FF               LHLD   SP   ; Get stack pointer
+0423   F9                     SPHL      ; Set stack pointer
+0424   2A A6 FF               LHLD   BC   ; Get BC
+0427   E5                     PUSH   H   ; Save
+0428   C1                     POP   B   ; And set
+0429   2A A8 FF               LHLD   PSW   ; Get PSW
+042C   E5                     PUSH   H   ; Save
+042D   F1                     POP   PSW   ; And set
+042E   2A A4 FF               LHLD   DE   ; Get DE
+0431   EB                     XCHG      ; Set DE
+0432   2A A2 FF               LHLD   HL   ; Get HL
+0435   C3 CA FF               JMP   INST   ; Execute "faked" instruction
+0438                             ; Trace routine: simulate a breakpoint interrupt
+0438   E5           FAKE:     PUSH   H   ; Save HL on stack
+0439   2A D0 FF               LHLD   BUFFER   ; Get address to execute
+043C   E3                     XTHL      ; Restore HL, [SP] = address
+043D   C3 5A 00               JMP   ENTRY   ; Display the registers
+0440                             ; 
+0440                             ; Display/Change registers
+0440                             ; 
+0440   C2 49 04     REGIST:   JNZ   CHG1   ; Register name to change is given
+0443                             ; Display registers
+0443   CD 13 08               CALL   REGDIS   ; Display registers
+0446   C3 8D 01               JMP   REST   ; And exit
+0449                             ; Set register value
+0449   47           CHG1:     MOV   B,A   ; Save first register name char
+044A   CD BB 07               CALL   GETCHI   ; Get char (in upper case)
+044D   4F                     MOV   C,A   ; Save for later
+044E   CA 57 04               JZ   OKCH   ; End of string
+0451                             ; Drop extra characters incase "PSW"
+0451   CD BC 07     CHG2:     CALL   GETCHR   ; Get next
+0454   C2 51 04               JNZ   CHG2   ; Clean them out
+0457                             ; Get new value for register
+0457   CD D6 07     OKCH:     CALL   CALC   ; Get new value
+045A   78                     MOV   A,B   ; Get first char
+045B   FE 48                  CPI   "H"   ; Is it HL pair
+045D   C2 66 04               JNZ   CDE   ; No, try next
+0460   22 A2 FF               SHLD   HL   ; Set HL value
+0463   C3 8D 01               JMP   REST   ; And proceed
+0466   FE 44        CDE:      CPI   "D"   ; Is it DE pair?
+0468   C2 71 04               JNZ   CBC   ; No, try next
+046B   22 A4 FF               SHLD   DE   ; Set DE value
+046E   C3 8D 01               JMP   REST   ; And proceed
+0471   FE 42        CBC:      CPI   "B"   ; Is it BC pair?
+0473   C2 7C 04               JNZ   CSP   ; No, try next
+0476   22 A6 FF               SHLD   BC   ; Set BC value
+0479   C3 8D 01               JMP   REST   ; And proceed
+047C   FE 53        CSP:      CPI   "S"   ; Is it SP?
+047E   C2 87 04               JNZ   CP   ; No, try next
+0481   22 AA FF               SHLD   SP   ; Set SP value
+0484   C3 8D 01               JMP   REST   ; And proceed
+0487   FE 50        CP:       CPI   "P"   ; Is it PS or PC
+0489   C2 AA 01               JNZ   ERROR   ; No, error
+048C   79                     MOV   A,C   ; Get low character
+048D   FE 53                  CPI   "S"   ; Is it PSW?
+048F   C2 98 04               JNZ   CPC   ; No, try next
+0492   22 A8 FF               SHLD   PSW   ; Set new PSW
+0495   C3 8D 01               JMP   REST   ; And proceed
+0498   FE 43        CPC:      CPI   "C"   ; Is it PC?
+049A   C2 AA 01               JNZ   ERROR   ; No, error
+049D   22 AC FF               SHLD   PC   ; Set new PC
+04A0   C3 8D 01               JMP   REST   ; And proceed
+04A3                             ; Process an ON/OFF operand
+04A3   CD B0 07     ONOFF:    CALL   SKIP   ; Get next char
+04A6   FE 4F                  CPI   "O"   ; Must begin with ON
+04A8   C2 AA 01               JNZ   ERROR   ; Invalid
+04AB   CD BB 07               CALL   GETCHI   ; Get next char
+04AE   06 00                  MVI   B,0   ; Assume OFF
+04B0   FE 46                  CPI   "F"   ; OFF?
+04B2   CA BB 04               JZ   RETON   ; Yes, set it
+04B5   FE 4E                  CPI   "N"   ; ON?
+04B7   C2 AA 01               JNZ   ERROR   ; No, error
+04BA   05                     DCR   B   ; Convert to FF
+04BB   78           RETON:    MOV   A,B   ; Save new value
+04BC   C9                     RET      
+04BD                             ; 
+04BD                             ; Turn automatic register display ON or OFF
+04BD                             ; 
+04BD   CD A3 04     AUTO:     CALL   ONOFF   ; Get ON/OFF value
+04C0   32 B1 FF               STA   AFLAG   ; Set AUTOREG flag
+04C3   C3 8D 01               JMP   REST   ; And proceed
+04C6                             ; 
+04C6                             ; Turn SUBROUTINE tracing ON or OFF
+04C6                             ; 
+04C6   CD A3 04     SUBON:    CALL   ONOFF   ; Get ON/OFF value
+04C9   32 B0 FF               STA   SFLAG   ; Set SUBTRACE flag
+04CC   C3 8D 01               JMP   REST   ; And proceed
+04CF                             ; 
+04CF                             ; Set TRACE mode ON or OFF
+04CF                             ; 
+04CF   CD A3 04     TRACE:    CALL   ONOFF   ; Get ON/OFF value
+04D2   32 AF FF               STA   TFLAG   ; Set TRACE flag
+04D5   C3 8D 01               JMP   REST   ; And proceed
+04D8                             ; 
+04D8                             ; Edit memory contents
+04D8                             ; 
+04D8   CD D6 07     EDIT:     CALL   CALC   ; Get address
+04DB   CD 40 0F     EDIT1:    CALL   HLOUT   ; Display address
+04DE   CD 9B 08               CALL   SPACE   ; Separator
+04E1   7E                     MOV   A,M   ; Get contents
+04E2   CD 45 0F               CALL   HPR   ; Output
+04E5   3E 3D                  MVI   A,"="   ; Prompt
+04E7   CD AA 0F               CALL   OUT   ; Output
+04EA   E5                     PUSH   H   ; Save address
+04EB   CD 67 07               CALL   INPT   ; Get a value
+04EE   E1                     POP   H   ; Restore address
+04EF   23                     INX   H   ; Assume advance
+04F0   CA DB 04               JZ   EDIT1   ; Null, advance
+04F3   2B                     DCX   H   ; Fix mistake
+04F4   2B                     DCX   H   ; Assume backup
+04F5   FE 2D                  CPI   "-"   ; Backup?
+04F7   CA DB 04               JZ   EDIT1   ; Yes, backup a byte
+04FA   23                     INX   H   ; Fix mistake
+04FB   FE 27                  CPI   27h   ; Single quote?
+04FD   C2 0C 05               JNZ   EDIT3   ; No, try hex value
+0500                             ; Handle quoted ASCII text
+0500   13                     INX   D   ; Skip the quote
+0501   1A           EDIT2:    LDAX   D   ; Get char
+0502   13                     INX   D   ; Advance input
+0503   A7                     ANA   A   ; End of loop?
+0504   CA DB 04               JZ   EDIT1   ; Yes, exit
+0507   77                     MOV   M,A   ; Save it
+0508   23                     INX   H   ; Advance output
+0509   C3 01 05               JMP   EDIT2   ; And proceed
+050C                             ; Handle HEXIDECIMAL values
+050C   E5           EDIT3:    PUSH   H   ; Save address
+050D   CD CC 07               CALL   CALC8   ; Get HEX value
+0510   E1                     POP   H   ; HL = address
+0511   77                     MOV   M,A   ; Set value
+0512   23                     INX   H   ; Advance to next
+0513   CD B0 07               CALL   SKIP   ; More operands?
+0516   C2 0C 05               JNZ   EDIT3   ; Get then all
+0519   C3 DB 04               JMP   EDIT1   ; And continue
+051C                             ; 
+051C                             ; FIll memory with a value
+051C                             ; 
+051C   CD D6 07     FILL:     CALL   CALC   ; Get starting address
+051F   E5                     PUSH   H   ; Save for later
+0520   CD D6 07               CALL   CALC   ; Get ending address
+0523   E5                     PUSH   H   ; Save for later
+0524   CD CC 07               CALL   CALC8   ; Get value
+0527   4F                     MOV   C,A   ; C = value
+0528   D1                     POP   D   
+0529   13                     INX   D   ; DE = End address+1
+052A   E1                     POP   H   ; HL = Starting address
+052B   CD 3C 05               CALL   COMP16   ; Is Start<End ?
+052E   D2 AA 01               JNC   ERROR   ; Yes, bad entry
+0531   71           FILL1:    MOV   M,C   ; Save one byte
+0532   23                     INX   H   ; Advance
+0533   CD 3C 05               CALL   COMP16   ; Test for match
+0536   DA 31 05               JC   FILL1   ; And proceed
+0539   C3 8D 01               JMP   REST   ; Back for next
+053C                             ; 
+053C                             ; 16 bit compare of HL to DE
+053C                             ; 
+053C   7C           COMP16:   MOV   A,H   ; Get HIGH
+053D   BA                     CMP   D   ; Match?
+053E   C0                     RNZ      ; No, we are done
+053F   7D                     MOV   A,L   ; Get LOW
+0540   BB                     CMP   E   ; Match?
+0541   C9                     RET      
+0542                             ; 
+0542                             ; Copy a block of memory
+0542                             ; 
+0542   CD D6 07     COPY:     CALL   CALC   ; Get SOURCE address
+0545   E5                     PUSH   H   ; Save for later
+0546   CD D6 07               CALL   CALC   ; Get DEST Address
+0549   E5                     PUSH   H   ; Save for later
+054A   CD D6 07               CALL   CALC   ; Get size
+054D   44                     MOV   B,H   ; BC = Size
+054E   4D                     MOV   C,L   
+054F   D1                     POP   D   ; DE = Dest address
+0550   E1                     POP   H   ; HL = Source
+0551   78                     MOV   A,B   ; Size is zero?
+0552   B1                     ORA   C   
+0553   CA 8D 01               JZ   REST   ; Yes, exit
+0556   CD 3C 05               CALL   COMP16   ; Compare source and destination address
+0559   DA 69 05               JC   COPY2   ; Dest > Source, jump
+055C                             ; Source > Dest
+055C   7E           COPY1:    MOV   A,M   ; Get byte from source
+055D   12                     STAX   D   ; Write to dest
+055E   23                     INX   H   ; Advance source
+055F   13                     INX   D   ; Advance dest
+0560   0B                     DCX   B   ; Reduce count
+0561   79                     MOV   A,C   ; Count is zero ?
+0562   B0                     ORA   B   
+0563   C2 5C 05               JNZ   COPY1   ; No, continue
+0566   C3 8D 01               JMP   REST   
+0569                             ; Dest > Source
+0569   09           COPY2:    DAD   B   ; Move source and destination address to end
+056A   2B                     DCX   H   ; of block
+056B   EB                     XCHG      
+056C   09                     DAD   B   
+056D   2B                     DCX   H   
+056E   1A           COPY3:    LDAX   D   ; Get byte from source
+056F   77                     MOV   M,A   ; Write to dest
+0570   1B                     DCX   D   ; Decrement source address
+0571   2B                     DCX   H   ; Decrement destination address
+0572   0B                     DCX   B   ; Reduce count
+0573   79                     MOV   A,C   ; Count is zero ?
+0574   B0                     ORA   B   
+0575   C2 6E 05               JNZ   COPY3   ; No, continue
+0578   C3 8D 01               JMP   REST   
+057B                             ; 
+057B                             ; Display a block of memory
+057B                             ; 
+057B   CD D6 07     MEMRY:    CALL   CALC   ; Get operand
+057E   97                     SUB   A   ; Get a ZERO
+057F   32 AE FF               STA   OFLAG   ; Clear output flag
+0582   CD 95 08     ALOOP:    CALL   HLOUT2   ; Display address (in hex) with 2 spaces
+0585   16 10                  MVI   D,16   ; 16 bytes/line
+0587   E5                     PUSH   H   ; Save address
+0588   7E           ALP1:     MOV   A,M   ; Get byte
+0589   CD 45 0F               CALL   HPR   ; Output in hex
+058C   CD 9B 08               CALL   SPACE   ; Space over
+058F   7A                     MOV   A,D   ; Get count
+0590   FE 09                  CPI   9   ; At boundary?
+0592   CC 9B 08               CZ   SPACE   ; Yes, extra space
+0595   7A                     MOV   A,D   ; Get count
+0596   E6 07                  ANI   7   ; Mask for low bits
+0598   FE 05                  CPI   5   ; At boundary?
+059A   CC 9B 08               CZ   SPACE   ; Extra space
+059D   23                     INX   H   ; Advance address
+059E   15                     DCR   D   ; Reduce count
+059F   C2 88 05               JNZ   ALP1   ; Do them all
+05A2   16 04                  MVI   D,4   ; # separating spaces
+05A4   CD 9B 08     AL2:      CALL   SPACE   ; Output a space
+05A7   15                     DCR   D   ; Reduce count
+05A8   C2 A4 05               JNZ   AL2   ; And proceed
+05AB   E1                     POP   H   
+05AC   16 10                  MVI   D,16   ; 16 chars/display
+05AE   7E           AL3:      MOV   A,M   ; Get data byte
+05AF   CD 94 0F               CALL   OUTP   ; Display (if printable)
+05B2   23                     INX   H   ; Advance to next
+05B3   15                     DCR   D   ; Reduce count
+05B4   C2 AE 05               JNZ   AL3   ; Do them all
+05B7   CD 67 0F               CALL   CHKSUS   ; Handle output suspension
+05BA   C3 82 05               JMP   ALOOP   ; And continue
+05BD                             ; 
+05BD                             ; Perform disassembly to console
+05BD                             ; 
+05BD   CD D6 07     GODIS:    CALL   CALC   ; Get starting address
+05C0   E5                     PUSH   H   ; Save address
+05C1   D1                     POP   D   ; Copy to D
+05C2   97                     SUB   A   ; Get a zero
+05C3   32 AE FF               STA   OFLAG   ; Clear output flag
+05C6   CD AA 08     VLOOP:    CALL   DINST   ; Display one instruction
+05C9   CD 67 0F               CALL   CHKSUS   ; Handle output
+05CC   C3 C6 05               JMP   VLOOP   ; And proceed
+05CF                             ; 
+05CF                             ; Set/display user base address
+05CF                             ; 
+05CF   C2 E4 05     USRBASE:   JNZ   USRB1   ; Address is given, set it
+05D2   CD 58 0F               CALL   PRTMSG   ; Output message
+05D5   42 41 53 45 3D 00      DB   "BASE=",0   
+05DB   2A A0 FF               LHLD   UBASE   ; Get address
+05DE   CD 40 0F               CALL   HLOUT   ; Output
+05E1   C3 8A 01               JMP   RECR   ; New line & exit
+05E4   CD D6 07     USRB1:    CALL   CALC   ; Get operand
+05E7   22 A0 FF               SHLD   UBASE   ; Set the address
+05EA   C3 8D 01               JMP   REST   ; and return
+05ED                             ; 
+05ED                             ; Send out as Intel HEX
+05ED                             ; 
+05ED   CD D6 07     SNDHEX:   CALL   CALC   ; Get start address
+05F0   E5                     PUSH   H   ; Save for later
+05F1   CD D6 07               CALL   CALC   ; Get end address
+05F4   23                     INX   H   ; HL = end+1
+05F5   D1                     POP   D   ; DE = start
+05F6   CD 3C 05               CALL   COMP16   ; Check for Start > End
+05F9   DA AA 01               JC   ERROR   ; Bad entry
+05FC   7D                     MOV   A,L   ; Compute length
+05FD   93                     SUB   E   
+05FE   6F                     MOV   L,A   
+05FF   7C                     MOV   A,H   
+0600   9A                     SBB   D   
+0601   67                     MOV   H,A   
+0602   EB                     XCHG      ; HL = start, DE = length
+0603   7A           SNDHX1:   MOV   A,D   ; Finish ?
+0604   B3                     ORA   E   
+0605   CA 1B 06               JZ   SNDHX3   ; Yes, jump
+0608   06 10                  MVI   B,16   ; 16 bytes per record
+060A   7A                     MOV   A,D   ; Is rest > 16 ?
+060B   B7                     ORA   A   
+060C   C2 15 06               JNZ   SNDHX2   ; No, jump
+060F   7B                     MOV   A,E   
+0610   B8                     CMP   B   
+0611   D2 15 06               JNC   SNDHX2   ; No, jump
+0614   43                     MOV   B,E   ; Yes, B=rest
+0615   CD 2F 06     SNDHX2:   CALL   SHXRC   ; Send out one record
+0618   C3 03 06               JMP   SNDHX1   ; continue
+061B                             ; 
+061B   CD 58 0F     SNDHX3:   CALL   PRTMSG   
+061E   3A 30 30 30 30 30 30 30 31 46 46 0D 0A 00 DB   ":00000001FF",0Dh,0Ah,0   
+062C   C3 8D 01               JMP   REST   
+062F                             ; 
+062F   3E 3A        SHXRC:    MVI   A,":"   ; Start record
+0631   CD AA 0F               CALL   OUT   
+0634   78                     MOV   A,B   ; Length
+0635   4F                     MOV   C,A   ; Init checksum
+0636   CD 45 0F               CALL   HPR   ; Output in hex
+0639   7C                     MOV   A,H   ; High byte of address
+063A   81                     ADD   C   ; Include in checksum
+063B   4F                     MOV   C,A   ; Re-save
+063C   7C                     MOV   A,H   
+063D   CD 45 0F               CALL   HPR   ; Output in hex
+0640   7D                     MOV   A,L   ; Low byte of address
+0641   81                     ADD   C   ; Include in checksum
+0642   4F                     MOV   C,A   ; Re-save
+0643   7D                     MOV   A,L   
+0644   CD 45 0F               CALL   HPR   ; Output in hex
+0647   AF                     XRA   A   ; Record type
+0648   CD 45 0F               CALL   HPR   
+064B   7E           SHXRC1:   MOV   A,M   ; One byte
+064C   81                     ADD   C   ; Include in checksum
+064D   4F                     MOV   C,A   ; Re-save
+064E   7E                     MOV   A,M   
+064F   23                     INX   H   
+0650   CD 45 0F               CALL   HPR   ; Output in hex
+0653   1B                     DCX   D   ; Decrement main counter
+0654   05                     DCR   B   ; Decrement bytes per record counter
+0655   C2 4B 06               JNZ   SHXRC1   
+0658   79                     MOV   A,C   ; Negate checksum
+0659   2F                     CMA      
+065A   3C                     INR   A   
+065B   CD 45 0F               CALL   HPR   ; Output in hex
+065E   C3 A3 0F               JMP   CRLF   
+0661                             ; 
+0661                             ; Download command
+0661                             ; 
+0661   3E 0F        LOAD:     MVI   A,0Fh   ; Get default initial state
+0663   CA 6E 06               JZ   LOAD1   ; Address not given...
+0666   CD D6 07               CALL   CALC   ; Get operand value
+0669   22 D3 FF               SHLD   BUFFER+3   ; Save for later calulation
+066C   3E FF                  MVI   A,0FFh   ; Set new initial state
+066E                             ; Setup the offset calculator
+066E   21 00 00     LOAD1:    LXI   H,0   ; Assume no offset
+0671   32 D0 FF               STA   BUFFER   ; Set mode flag
+0674   22 D1 FF               SHLD   BUFFER+1   ; Assume offset is ZERO
+0677                             ; Download the records
+0677   CD A4 06     LOAD2:    CALL   DLREC   ; Get a record
+067A   C2 83 06               JNZ   DLBAD   ; Report error
+067D   D2 77 06               JNC   LOAD2   ; Get them all
+0680   C3 94 06               JMP   DLWAIT   ; And back to monitor
+0683                             ; Error in receiving download record
+0683   CD 58 0F     DLBAD:    CALL   PRTMSG   ; Output message
+0686   3F 4C 6F 61 64 20 65 72 72 6F 72 DB   "?Load error"   
+0691   0D 0A 00               DB   0Dh,0Ah,0   
+0694                             ; Wait till incoming data stream stops
+0694   0E 00        DLWAIT:   MVI   C,0   ; Initial count
+0696   CD B6 0F     DLWAIT1:   CALL   IN   ; Test for input
+0699   A7                     ANA   A   ; Any data
+069A   C2 94 06               JNZ   DLWAIT   ; Reset count
+069D   0D                     DCR   C   ; Reduce counter
+069E   C2 96 06               JNZ   DLWAIT1   ; Keep looking
+06A1   C3 8D 01               JMP   REST   ; Back to monitor
+06A4                             ; 
+06A4                             ; Download a record from the serial port
+06A4                             ; 
+06A4   CD 38 0F     DLREC:    CALL   INCHR   ; Read a character
+06A7   FE 3A                  CPI   ":"   ; Start of record?
+06A9   CA EB 06               JZ   DLINT   ; Download INTEL format
+06AC   FE 53                  CPI   "S"   ; Is it MOTOROLA?
+06AE   C2 A4 06               JNZ   DLREC   ; No, keep looking
+06B1                             ; Download a MOTOROLA HEX format record
+06B1   CD 38 0F     DLMOT:    CALL   INCHR   ; Get next character
+06B4   FE 30                  CPI   "0"   ; Header record?
+06B6   CA A4 06               JZ   DLREC   ; Yes, skip it
+06B9   FE 39                  CPI   "9"   ; End of file?
+06BB   CA 19 07               JZ   DLEOF   ; Yes, report EOF
+06BE   FE 31                  CPI   "1"   ; Type 1 (code) record
+06C0   C2 64 07               JNZ   DLERR   ; Report error
+06C3   CD 40 07               CALL   GETBYT   ; Get length
+06C6   4F                     MOV   C,A   ; Start checksum
+06C7   D6 03                  SUI   3   ; Convert for overhead
+06C9   47                     MOV   B,A   ; Save data length
+06CA   CD 40 07               CALL   GETBYT   ; Get first byte of address
+06CD   67                     MOV   H,A   ; Set HIGH address
+06CE   81                     ADD   C   ; Include in checksum
+06CF   4F                     MOV   C,A   ; And re-save
+06D0   CD 40 07               CALL   GETBYT   ; Get next byte of address
+06D3   6F                     MOV   L,A   ; Set LOW address
+06D4   81                     ADD   C   ; Include in checksum
+06D5   4F                     MOV   C,A   ; And re-save
+06D6   CD 1B 07               CALL   SETOFF   ; Handle record offsets
+06D9   CD 40 07     DMOT1:    CALL   GETBYT   ; Get a byte of data
+06DC   77                     MOV   M,A   ; Save in memory
+06DD   23                     INX   H   ; Advance
+06DE   81                     ADD   C   ; Include in checksum
+06DF   4F                     MOV   C,A   ; And re-save
+06E0   05                     DCR   B   ; Reduce length
+06E1   C2 D9 06               JNZ   DMOT1   ; Keep going
+06E4   CD 40 07               CALL   GETBYT   ; Get record checksum
+06E7   81                     ADD   C   ; Include calculated checksum
+06E8   3C                     INR   A   ; Adjust for test
+06E9   A7                     ANA   A   ; Clear carry set Z
+06EA   C9                     RET      
+06EB                             ; Download a record in INTEL hex format
+06EB   CD 40 07     DLINT:    CALL   GETBYT   ; Get length
+06EE   A7                     ANA   A   ; End of file?
+06EF   CA 19 07               JZ   DLEOF   ; Yes, handle it
+06F2   4F                     MOV   C,A   ; Begin Checksum
+06F3   47                     MOV   B,A   ; Record length
+06F4   CD 40 07               CALL   GETBYT   ; Get HIGH address
+06F7   67                     MOV   H,A   ; Set HIGH address
+06F8   81                     ADD   C   ; Include in checksum
+06F9   4F                     MOV   C,A   ; Re-save
+06FA   CD 40 07               CALL   GETBYT   ; Get LOW address
+06FD   6F                     MOV   L,A   ; Set LOW address
+06FE   81                     ADD   C   ; Include in checksum
+06FF   4F                     MOV   C,A   ; Re-save
+0700   CD 1B 07               CALL   SETOFF   ; Handle record offsets
+0703   CD 40 07               CALL   GETBYT   ; Get type byte
+0706   81                     ADD   C   ; Include in checksum
+0707   4F                     MOV   C,A   ; Re-save
+0708   CD 40 07     DLINT1:   CALL   GETBYT   ; Get data byte
+070B   77                     MOV   M,A   ; Save in memory
+070C   23                     INX   H   ; Advance to next
+070D   81                     ADD   C   ; Include in checksum
+070E   4F                     MOV   C,A   ; Resave checksum
+070F   05                     DCR   B   ; Reduce count
+0710   C2 08 07               JNZ   DLINT1   ; Do entire record
+0713   CD 40 07               CALL   GETBYT   ; Get record checksum
+0716   81                     ADD   C   ; Add to computed checksum
+0717   A7                     ANA   A   ; Clear carry, set Z
+0718   C9                     RET      
+0719                             ; End of file on download
+0719   37           DLEOF:    STC      ; Set carry, EOF
+071A   C9                     RET      
+071B                             ; 
+071B                             ; Process record offsets for download records
+071B                             ; 
+071B   3A D0 FF     SETOFF:   LDA   BUFFER   ; Get flag
+071E   A7                     ANA   A   ; Test flag
+071F   C2 28 07               JNZ   SETOF1   ; Special case
+0722                             ; Not first record, adjust for offset & proceed
+0722   EB                     XCHG      ; DE = address
+0723   2A D1 FF               LHLD   BUFFER+1   ; Get offset
+0726   19                     DAD   D   ; HL = address + offset
+0727   C9                     RET      
+0728                             ; First record, set USER BASE & calculate offset (if any)
+0728   3E 00        SETOF1:   MVI   A,0   ; Get zero (NO CC)
+072A   32 D0 FF               STA   BUFFER   ; Clear flag
+072D   22 A0 FF               SHLD   UBASE   ; Set user program base
+0730   F0                     RP      ; No more action
+0731                             ; Calculate record offset to RAM area
+0731   EB                     XCHG      ; DE = address
+0732   2A D3 FF               LHLD   BUFFER+3   ; Get operand
+0735   7D                     MOV   A,L   ; Subtract
+0736   93                     SUB   E   ; Record
+0737   6F                     MOV   L,A   ; From
+0738   7C                     MOV   A,H   ; Operand
+0739   9A                     SBB   D   ; To get
+073A   67                     MOV   H,A   ; Offset
+073B   22 D1 FF               SHLD   BUFFER+1   ; Set new offset
+073E   19                     DAD   D   ; Get address
+073F   C9                     RET      
+0740                             ; 
+0740                             ; Gets a byte of HEX data from serial port.
+0740                             ; 
+0740   CD 4D 07     GETBYT:   CALL   GETNIB   ; Get first nibble
+0743   07                     RLC      ; Shift into
+0744   07                     RLC      ; Upper nibble
+0745   07                     RLC      ; Of result
+0746   07                     RLC      ; To make room for lower
+0747   5F                     MOV   E,A   ; Keep high digit
+0748   CD 4D 07               CALL   GETNIB   ; Get second digit
+074B   B3                     ORA   E   ; Insert high digit
+074C   C9                     RET      
+074D                             ; GETS A NIBBLE FROM THE TERMINAL (IN ASCII HEX)
+074D   CD 38 0F     GETNIB:   CALL   INCHR   ; Get a character
+0750   D6 30                  SUI   "0"   ; Is it < "0"?
+0752   DA 62 07               JC   GETN1   ; Yes, invalid
+0755   FE 0A                  CPI   10   ; 0-9?
+0757   D8                     RC      ; Yes, its OK
+0758   D6 07                  SUI   7   ; Convert
+075A   FE 0A                  CPI   10   ; 9-A?
+075C   DA 62 07               JC   GETN1   ; Yes, invalid
+075F   FE 10                  CPI   16   ; A-F?
+0761   D8                     RC      ; Yes, its OK
+0762   D1           GETN1:    POP   D   ; Remove GETNIB RET addr
+0763   D1                     POP   D   ; Remove GETBYT RET addr
+0764                             ; Error during download record
+0764   F6 FF        DLERR:    ORI   0FFh   ; Error indicator
+0766   C9                     RET      
+0767                             ; 
+0767                             ; Read an input line from the console
+0767                             ; 
+0767   21 D0 FF     INPT:     LXI   H,BUFFER   ; Point to input buffer
+076A   CD 38 0F     INPT1:    CALL   INCHR   ; Get a char
+076D   FE 1B                  CPI   1Bh   ; ESCAPE?
+076F   CA 8A 01               JZ   RECR   ; Back for command
+0772   FE 0D                  CPI   0Dh   ; Carriage return?
+0774   CA A8 07               JZ   INPT4   ; Yes, exit
+0777   57                     MOV   D,A   ; Save for later
+0778                             ; Test for DELETE function
+0778   FE 7F                  CPI   7Fh   ; Is it delete?
+077A   CA 93 07               JZ   INPT3   ; Yes, it is
+077D   FE 08                  CPI   08h   ; Backspace?
+077F   CA 93 07               JZ   INPT3   ; Yes, it is
+0782                             ; Insert character in buffer
+0782   7D                     MOV   A,L   ; Get low address
+0783   FE EE                  CPI   (BUFFER&255)+30   ; Beyond end?
+0785   3E 07                  MVI   A,7   ; Assume error
+0787   CA 8D 07               JZ   INPT2   ; Yes, report error
+078A   7A                     MOV   A,D   ; Get char back
+078B   77                     MOV   M,A   ; Save in memory
+078C   23                     INX   H   ; Advance
+078D   CD AA 0F     INPT2:    CALL   OUT   ; Echo it
+0790   C3 6A 07               JMP   INPT1   ; And proceed
+0793                             ; Delete last character from buffer
+0793   7D           INPT3:    MOV   A,L   ; Get char
+0794   FE D0                  CPI   BUFFER&255   ; At begining
+0796   3E 07                  MVI   A,7   ; Assume error
+0798   CA 8D 07               JZ   INPT2   ; Report error
+079B   E5                     PUSH   H   ; Save H
+079C   CD 58 0F               CALL   PRTMSG   ; Output message
+079F   08 20 08 00            DB   8," ",8,0   ; Wipe away character
+07A3   E1                     POP   H   ; Restore H
+07A4   2B                     DCX   H   ; Backup
+07A5   C3 6A 07               JMP   INPT1   ; And proceed
+07A8                             ; Terminate the command
+07A8   36 00        INPT4:    MVI   M,0   ; Zero terminate
+07AA   CD A3 0F               CALL   CRLF   ; New line
+07AD   11 D0 FF               LXI   D,BUFFER   ; Point to input buffer
+07B0                             ; Advance to next non-blank in buffer
+07B0   1A           SKIP:     LDAX   D   ; Get char from buffer
+07B1   13                     INX   D   ; Advance
+07B2   FE 20                  CPI   " "   ; Space?
+07B4   CA B0 07               JZ   SKIP   ; Yes, keep looking
+07B7   1B                     DCX   D   ; Backup to it
+07B8   C3 C0 07               JMP   TOCAP   ; And convert to upper
+07BB                             ; 
+07BB                             ; Read next character from command & convert to upper case
+07BB                             ; 
+07BB   13           GETCHI:   INX   D   ; Skip next character
+07BC   1A           GETCHR:   LDAX   D   ; Get char from command line
+07BD   A7                     ANA   A   ; End of line?
+07BE   C8                     RZ      ; Yes, return with it
+07BF   13                     INX   D   ; Advance command pointer
+07C0                             ; 
+07C0                             ; Convert character in A to uppercase, set Z if SPACE or EOL
+07C0                             ; 
+07C0   FE 61        TOCAP:    CPI   61h   ; Lower case?
+07C2   DA C7 07               JC   TOCAP1   ; Yes, its ok
+07C5   E6 5F                  ANI   5Fh   ; Convert to UPPER
+07C7   FE 20        TOCAP1:   CPI   " "   ; Space
+07C9   C8                     RZ      ; Yes, indicate
+07CA   A7                     ANA   A   ; Set "Z" if EOL
+07CB   C9                     RET      
+07CC                             ; 
+07CC                             ; Get 8 bit HEX operands to command
+07CC                             ; 
+07CC   CD D6 07     CALC8:    CALL   CALC   ; Get operand
+07CF   7C                     MOV   A,H   ; High byte must be zero
+07D0   B7                     ORA   A   
+07D1   C2 AA 01               JNZ   ERROR   ; Bad value
+07D4   7D                     MOV   A,L   ; Value also to A
+07D5   C9                     RET      
+07D6                             ; 
+07D6                             ; Get 16 bit HEX operands to command
+07D6                             ; 
+07D6   C5           CALC:     PUSH   B   ; Save B-C
+07D7   CD B0 07               CALL   SKIP   ; Find start of operand
+07DA   21 00 00               LXI   H,0   ; Begin with zero value
+07DD   4C                     MOV   C,H   ; Clear flag
+07DE   CD BC 07     CALC1:    CALL   GETCHR   ; Get next char
+07E1   CA FE 07               JZ   CALC3   ; End of number
+07E4   CD 05 08               CALL   VALHEX   ; Is it valid hex?
+07E7   DA AA 01               JC   ERROR   ; No, report error
+07EA   29                     DAD   H   ; HL = HL*2
+07EB   29                     DAD   H   ; HL = HL*4
+07EC   29                     DAD   H   ; HL = HL*8
+07ED   29                     DAD   H   ; HL = HL*16 (Shift over 4 bits)
+07EE   D6 30                  SUI   "0"   ; Convert to ASCII
+07F0   FE 0A                  CPI   10   ; Decimal number?
+07F2   DA F7 07               JC   CALC2   ; Yes, its ok
+07F5   D6 07                  SUI   7   ; Convert to HEX
+07F7   B5           CALC2:    ORA   L   ; Include in final value
+07F8   6F                     MOV   L,A   ; Resave low bute
+07F9   0E FF                  MVI   C,0FFh   ; Set flag & indicate we have char
+07FB   C3 DE 07               JMP   CALC1   ; And continue
+07FE                             ; End of input string was found
+07FE   79           CALC3:    MOV   A,C   ; Get flag
+07FF   C1                     POP   B   ; Restore B-C
+0800   A7                     ANA   A   ; Was there any digits?
+0801   CA AA 01               JZ   ERROR   ; No, invalid
+0804   C9                     RET      
+0805                             ; Test for character in A as valid hex
+0805   FE 30        VALHEX:   CPI   "0"   ; < "0"
+0807   D8                     RC      ; Too low
+0808   FE 47                  CPI   "G"   ; >"F"
+080A   3F                     CMC      ; Set C state
+080B   D8                     RC      ; Too high
+080C   FE 3A                  CPI   3Ah   ; <="9"
+080E   3F                     CMC      ; Set C state
+080F   D0                     RNC      ; Yes, its OK
+0810   FE 41                  CPI   "A"   ; Set C if < "A"
+0812   C9                     RET      
+0813                             ; 
+0813                             ; Display the user process registers
+0813                             ; 
+0813   2A A6 FF     REGDIS:   LHLD   BC   ; Get saved BC pair
+0816   01 43 42               LXI   B,"BC"   ; And register names
+0819   CD 88 08               CALL   OUTPT   ; Output
+081C   2A A4 FF               LHLD   DE   ; Get saved DE pair
+081F   01 45 44               LXI   B,"DE"   ; And register names
+0822   CD 88 08               CALL   OUTPT   ; Output
+0825   2A A2 FF               LHLD   HL   ; Get saved HL pair
+0828   01 4C 48               LXI   B,"HL"   ; And register names
+082B   CD 88 08               CALL   OUTPT   ; Output
+082E   2A AA FF               LHLD   SP   ; Get saved SP
+0831   01 50 53               LXI   B,"SP"   ; And register name
+0834   CD 88 08               CALL   OUTPT   ; Output
+0837   2A AC FF               LHLD   PC   ; Get saved PC
+083A   01 43 50               LXI   B,"PC"   ; And regsiter name
+083D   CD 88 08               CALL   OUTPT   ; Output
+0840   CD 58 0F               CALL   PRTMSG   ; Output message
+0843   20 50 53 57 3D 00      DB   " PSW=",0   
+0849   2A A8 FF               LHLD   PSW   ; Get saved PSW
+084C   CD 95 08               CALL   HLOUT2   ; Output value (with two spaces)
+084F   CD 58 0F               CALL   PRTMSG   ; Output
+0852   20 46 4C 41 47 53 3D 00 DB   " FLAGS=",0   
+085A   2A A7 FF               LHLD   PSW-1   ; Get Flags to H
+085D   06 53                  MVI   B,"S"   ; "S" flag
+085F   CD A0 08               CALL   OUTB   ; Display
+0862   06 5A                  MVI   B,"Z"   ; "Z" flag
+0864   CD A0 08               CALL   OUTB   ; Display
+0867   06 4B                  MVI   B,"K"   ; "K" flag
+0869   CD A0 08               CALL   OUTB   ; Display
+086C   06 41                  MVI   B,"A"   ; "A" flag
+086E   CD A0 08               CALL   OUTB   ; Display
+0871   06 33                  MVI   B,"3"   ; 3. bit flag
+0873   CD A0 08               CALL   OUTB   ; Display
+0876   06 50                  MVI   B,"P"   ; "P" flag
+0878   CD A0 08               CALL   OUTB   ; Display
+087B   06 56                  MVI   B,"V"   ; "V" flag
+087D   CD A0 08               CALL   OUTB   ; Display
+0880   06 43                  MVI   B,"C"   ; "C" flag
+0882   CD A0 08               CALL   OUTB   ; Display
+0885   C3 A3 0F               JMP   CRLF   ; New line & exit
+0888                             ; Display contents of a register pair
+0888   78           OUTPT:    MOV   A,B   ; Get first char of name
+0889   CD AA 0F               CALL   OUT   ; Output
+088C   79                     MOV   A,C   ; Get second char of name
+088D   CD AA 0F               CALL   OUT   ; Output
+0890   3E 3D                  MVI   A,"="   ; Get separator
+0892   CD AA 0F               CALL   OUT   ; Output
+0895   CD 40 0F     HLOUT2:   CALL   HLOUT   ; Output value
+0898   CD 9B 08               CALL   SPACE   ; Output a space
+089B                             ; Display a space on the console
+089B   3E 20        SPACE:    MVI   A," "   ; Get a spave
+089D   C3 AA 0F               JMP   OUT   ; Display it
+08A0                             ; Display an individual flag bit B=title, H[7]=bit
+08A0   29           OUTB:     DAD   H   ; Shift H[7] into carry
+08A1   3E 2D                  MVI   A,"-"   ; Dash for not set flag
+08A3   D2 AA 0F               JNC   OUT   ; Display dash
+08A6   78                     MOV   A,B   ; Get character
+08A7   C3 AA 0F               JMP   OUT   ; And display
+08AA                             ; 
+08AA                             ; Display an instruction in disassembly format
+08AA                             ; 
+08AA   D5           DINST:    PUSH   D   ; Save address
+08AB   7A                     MOV   A,D   ; Get high value
+08AC   CD 45 0F               CALL   HPR   ; Output
+08AF   7B                     MOV   A,E   ; Get low address
+08B0   CD 45 0F               CALL   HPR   ; Output
+08B3   CD 9B 08               CALL   SPACE   ; Output a space
+08B6   CD 37 09               CALL   LOOK   ; Lookup instruction
+08B9   E6 03                  ANI   03h   ; Save length
+08BB   F5                     PUSH   PSW   ; Save length
+08BC   E5                     PUSH   H   ; Save table address
+08BD   06 04                  MVI   B,4   ; 4 spaces total
+08BF   4F                     MOV   C,A   ; Save count
+08C0   1B                     DCX   D   ; Backup address
+08C1                             ; Display the opcode bytes in HEX
+08C1   13           VLP1:     INX   D   ; Advance
+08C2   1A                     LDAX   D   ; Get opcode
+08C3   CD 45 0F               CALL   HPR   ; Output in HEX
+08C6   CD 9B 08               CALL   SPACE   ; Separator
+08C9   05                     DCR   B   ; Reduce count
+08CA   0D                     DCR   C   ; Reduce count of opcodes
+08CB   C2 C1 08               JNZ   VLP1   ; Do them all
+08CE                             ; Fill in to boundary
+08CE   CD 9B 08     VLP2:     CALL   SPACE   ; Space over
+08D1   CD 9B 08               CALL   SPACE   ; Space over
+08D4   CD 9B 08               CALL   SPACE   ; Spave over
+08D7   05                     DCR   B   ; Reduce count
+08D8   C2 CE 08               JNZ   VLP2   ; Do them all
+08DB                             ; DISPLAY ASCII equivalent of opcodes
+08DB   C1                     POP   B   ; Restore table address
+08DC   F1                     POP   PSW   ; Restore type/length
+08DD   D1                     POP   D   ; Restore instruction address
+08DE   D5                     PUSH   D   ; Resave
+08DF   F5                     PUSH   PSW   ; Resave
+08E0   26 08                  MVI   H,8   ; 8 spaces/field
+08E2   E6 0F                  ANI   0Fh   ; Save only length
+08E4   6F                     MOV   L,A   ; Save for later
+08E5   1A           PCHR:     LDAX   D   ; Get byte from opcode
+08E6   13                     INX   D   ; Advance
+08E7   CD 94 0F               CALL   OUTP   ; Display (if printable)
+08EA   25                     DCR   H   ; Reduce field count
+08EB   2D                     DCR   L   ; Reduce opcode count
+08EC   C2 E5 08               JNZ   PCHR   ; Do them all
+08EF                             ; Space over to instruction address
+08EF   CD 9B 08     SPLP:     CALL   SPACE   ; Output a space
+08F2   25                     DCR   H   ; Reduce count
+08F3   C2 EF 08               JNZ   SPLP   ; Do them all
+08F6   16 06                  MVI   D,6   ; Field width
+08F8   0A           VLP3:     LDAX   B   ; Get char from table
+08F9   A7                     ANA   A   ; End of string?
+08FA   CA 11 09               JZ   VOUT1   ; Yes, exit
+08FD   CD AA 0F               CALL   OUT   ; Output it
+0900   03                     INX   B   ; Advance to next
+0901   15                     DCR   D   ; reduce count
+0902   FE 20                  CPI   " "   ; end of name?
+0904   C2 F8 08               JNZ   VLP3   ; no, keep going
+0907                             ; Fill in name field with spaces
+0907   15           VOUT:     DCR   D   ; reduce count
+0908   CA F8 08               JZ   VLP3   ; Keep going
+090B   CD 9B 08               CALL   SPACE   ; Output a space
+090E   C3 07 09               JMP   VOUT   ; And proceed
+0911                             ; Output operands for the instruction
+0911   F1           VOUT1:    POP   PSW   ; Restore type
+0912   D1                     POP   D   ; Restore instruction address
+0913   3D                     DCR   A   ; Is it type1?
+0914   CA 27 09               JZ   T1   ; Yes, handle it
+0917                             ; Type 2 -  One byte immediate date
+0917   F5           T2:       PUSH   PSW   ; Save type
+0918   3E 24                  MVI   A,"$"   ; Get HEX indicator
+091A   CD AA 0F               CALL   OUT   ; Output
+091D   F1                     POP   PSW   ; Restore type
+091E   3D                     DCR   A   ; Type 2?
+091F   C2 29 09               JNZ   T3   ; No, try next
+0922   13                     INX   D   ; Advance to data
+0923   1A                     LDAX   D   ; Get data
+0924   CD 45 0F               CALL   HPR   ; Output in HEX
+0927                             ; Type 1 - No operand
+0927   13           T1:       INX   D   
+0928   C9                     RET      
+0929                             ; Type 3 - Two bytes immediate data
+0929   13           T3:       INX   D   ; Skip to low	
+092A   13                     INX   D   ; Skip to high
+092B   1A                     LDAX   D   ; Get HIGH
+092C   CD 45 0F               CALL   HPR   ; Output
+092F   1B                     DCX   D   ; Backup to low
+0930   1A                     LDAX   D   ; Get LOW
+0931   CD 45 0F               CALL   HPR   ; Output
+0934   13                     INX   D   ; Advance to high
+0935   13                     INX   D   
+0936   C9                     RET      
+0937                             ; 
+0937                             ; Look up instruction in table & return TYPE/LENGTH[A], and string[HL]
+0937                             ; 
+0937   D5           LOOK:     PUSH   D   ; Save DE
+0938   1A                     LDAX   D   ; Get opcode
+0939   47                     MOV   B,A   ; Save for later
+093A   21 A9 09               LXI   H,ITABLE   ; Point to table
+093D   78           LOOK1:    MOV   A,B   ; Get Opcode
+093E   A6                     ANA   M   ; Mask
+093F   23                     INX   H   ; Skip mask
+0940   BE                     CMP   M   ; Does it match
+0941   23                     INX   H   ; Skip opcode
+0942   CA 4E 09               JZ   LOOK3   ; Yes, we found it
+0945                             ; This wasn't it, advance to the next
+0945   7E           LOOK2:    MOV   A,M   ; Get byte
+0946   23                     INX   H   ; Advance to next
+0947   A7                     ANA   A   ; End of string?
+0948   C2 45 09               JNZ   LOOK2   ; No, keep looking
+094B   C3 3D 09               JMP   LOOK1   ; And continue
+094E                             ; We found the instruction, copy over the text description
+094E   4E           LOOK3:    MOV   C,M   ; Save type
+094F   23                     INX   H   ; Skip type
+0950   11 D0 FF               LXI   D,BUFFER   ; Point to text buffer
+0953   7E           LOOK4:    MOV   A,M   ; Get char from source
+0954   23                     INX   H   ; Advance to next
+0955                             ; Insert a RESTART vector number
+0955   FE 76                  CPI   "v"   ; Restart vector
+0957   C2 65 09               JNZ   LOOK5   ; No, its OK
+095A   78                     MOV   A,B   ; Get opcode
+095B   0F                     RRC      ; Shift it
+095C   0F                     RRC      ; Over
+095D   0F                     RRC      ; To low digit
+095E   E6 07                  ANI   07h   ; Remove trash
+0960   C6 30                  ADI   "0"   ; Convert to digit
+0962   C3 9D 09               JMP   LOOK10   ; And set the character
+0965                             ; Insert a register pair name
+0965   FE 70        LOOK5:    CPI   "p"   ; Register PAIR?
+0967   C2 78 09               JNZ   LOOK6   ; No, try next
+096A   78                     MOV   A,B   ; Get opcode
+096B   0F                     RRC      ; Shift
+096C   0F                     RRC      ; Over into
+096D   0F                     RRC      ; Low digit
+096E   0F                     RRC      ; For lookup
+096F   E6 03                  ANI   03h   ; Save only RP
+0971   E5                     PUSH   H   ; Save HL
+0972   21 56 00               LXI   H,RPTAB   ; Point to pair table
+0975   C3 90 09               JMP   LOOK9   ; And proceed
+0978                             ; Insert destination register name
+0978   FE 64        LOOK6:    CPI   "d"   ; Set destination?
+097A   C2 84 09               JNZ   LOOK7   ; No, try next
+097D   78                     MOV   A,B   ; Get opcode
+097E   0F                     RRC      ; Shift
+097F   0F                     RRC      ; Into low
+0980   0F                     RRC      ; digit
+0981   C3 8A 09               JMP   LOOK8   ; And proceed
+0984                             ; Insert source register name
+0984   FE 73        LOOK7:    CPI   "s"   ; Source register?
+0986   C2 9D 09               JNZ   LOOK10   ; No, its OK
+0989   78                     MOV   A,B   ; Get opcode
+098A                             ; Lookup a general processor register
+098A   E6 07        LOOK8:    ANI   07h   ; Save only source
+098C   E5                     PUSH   H   ; Save HL
+098D   21 4E 00               LXI   H,RTAB   ; Point to table
+0990                             ; Lookup register in table
+0990   85           LOOK9:    ADD   L   ; Offset to value
+0991   6F                     MOV   L,A   ; Resave address
+0992   7E                     MOV   A,M   ; Get character
+0993   FE 53                  CPI   "S"   ; "SP" register ?
+0995   C2 9C 09               JNZ   LOOK9A   ; No, skip
+0998   12                     STAX   D   ; Save "S"
+0999   13                     INX   D   ; Advance to next
+099A   3E 50                  MVI   A,"P"   ; Character "P"
+099C   E1           LOOK9A:   POP   H   ; Restore HL
+099D                             ; Save character in destination string
+099D   12           LOOK10:   STAX   D   ; Save value
+099E   13                     INX   D   ; Advance to next
+099F   A7                     ANA   A   ; End of list?
+09A0   C2 53 09               JNZ   LOOK4   ; No, keep copying
+09A3                             ; End of LIST
+09A3   21 D0 FF               LXI   H,BUFFER   ; Point to description
+09A6   79                     MOV   A,C   ; Get length
+09A7   D1                     POP   D   ; Restore DE
+09A8   C9                     RET      
+09A9                             ; 
+09A9                             ; Opcode disassembly table: MASK, OPCODE, TYPE/LENGTH, STRINGZ
+09A9                             ; 
+09A9   FF FE 02     ITABLE:   DB   0FFh,0FEh,02h   
+09AC   43 50 49 20 00         DB   "CPI ",0   
+09B1   FF 3A 03               DB   0FFh,3Ah,03h   
+09B4   4C 44 41 20 00         DB   "LDA ",0   
+09B9   FF 32 03               DB   0FFh,32h,03h   
+09BC   53 54 41 20 00         DB   "STA ",0   
+09C1   FF 2A 03               DB   0FFh,2Ah,03h   
+09C4   4C 48 4C 44 20 00      DB   "LHLD ",0   
+09CA   FF 22 03               DB   0FFh,22h,03h   
+09CD   53 48 4C 44 20 00      DB   "SHLD ",0   
+09D3   FF F5 01               DB   0FFh,0F5h,01h   
+09D6   50 55 53 48 20 50 53 57 00 DB   "PUSH PSW",0   
+09DF   FF F1 01               DB   0FFh,0F1h,01h   
+09E2   50 4F 50 20 50 53 57 00 DB   "POP PSW",0   
+09EA   FF 27 01               DB   0FFh,27h,01h   
+09ED   44 41 41 00            DB   "DAA",0   
+09F1   FF 76 01               DB   0FFh,76h,01h   
+09F4   48 4C 54 00            DB   "HLT",0   
+09F8   FF FB 01               DB   0FFh,0FBh,01h   
+09FB   45 49 00               DB   "EI",0   
+09FE   FF F3 01               DB   0FFh,0F3h,01h   
+0A01   44 49 00               DB   "DI",0   
+0A04   FF 37 01               DB   0FFh,37h,01h   
+0A07   53 54 43 00            DB   "STC",0   
+0A0B   FF 3F 01               DB   0FFh,3Fh,01h   
+0A0E   43 4D 43 00            DB   "CMC",0   
+0A12   FF 2F 01               DB   0FFh,2Fh,01h   
+0A15   43 4D 41 00            DB   "CMA",0   
+0A19   FF EB 01               DB   0FFh,0EBh,01h   
+0A1C   58 43 48 47 00         DB   "XCHG",0   
+0A21   FF E3 01               DB   0FFh,0E3h,01h   
+0A24   58 54 48 4C 00         DB   "XTHL",0   
+0A29   FF F9 01               DB   0FFh,0F9h,01h   
+0A2C   53 50 48 4C 00         DB   "SPHL",0   
+0A31   FF E9 01               DB   0FFh,0E9h,01h   
+0A34   50 43 48 4C 00         DB   "PCHL",0   
+0A39   FF DB 02               DB   0FFh,0DBh,02h   
+0A3C   49 4E 20 00            DB   "IN ",0   
+0A40   FF D3 02               DB   0FFh,0D3h,02h   
+0A43   4F 55 54 20 00         DB   "OUT ",0   
+0A48   FF 07 01               DB   0FFh,07h,01h   
+0A4B   52 4C 43 00            DB   "RLC",0   
+0A4F   FF 0F 01               DB   0FFh,0Fh,01h   
+0A52   52 52 43 00            DB   "RRC",0   
+0A56   FF 17 01               DB   0FFh,17h,01h   
+0A59   52 41 4C 00            DB   "RAL",0   
+0A5D   FF 1F 01               DB   0FFh,1Fh,01h   
+0A60   52 41 52 00            DB   "RAR",0   
+0A64   FF C6 02               DB   0FFh,0C6h,02h   
+0A67   41 44 49 20 00         DB   "ADI ",0   
+0A6C   FF CE 02               DB   0FFh,0CEh,02h   
+0A6F   41 43 49 20 00         DB   "ACI ",0   
+0A74   FF D6 02               DB   0FFh,0D6h,02h   
+0A77   53 55 49 20 00         DB   "SUI ",0   
+0A7C   FF DE 02               DB   0FFh,0DEh,02h   
+0A7F   53 42 49 20 00         DB   "SBI ",0   
+0A84   FF E6 02               DB   0FFh,0E6h,02h   
+0A87   41 4E 49 20 00         DB   "ANI ",0   
+0A8C   FF F6 02               DB   0FFh,0F6h,02h   
+0A8F   4F 52 49 20 00         DB   "ORI ",0   
+0A94   FF EE 02               DB   0FFh,0EEh,02h   
+0A97   58 52 49 20 00         DB   "XRI ",0   
+0A9C   FF 00 01               DB   0FFh,00h,01h   
+0A9F   4E 4F 50 00            DB   "NOP",0   
+0AA3                             ; 8085 specific instructions
+0AA3   FF 20 01               DB   0FFh,20h,01h   
+0AA6   52 49 4D 00            DB   "RIM",0   
+0AAA   FF 30 01               DB   0FFh,30h,01h   
+0AAD   53 49 4D 00            DB   "SIM",0   
+0AB1                             ; 8085 undocumented instructions
+0AB1   FF 08 01               DB   0FFh,08h,01h   
+0AB4   44 53 55 42 20 42 00   DB   "DSUB B",0   
+0ABB   FF 10 01               DB   0FFh,10h,01h   
+0ABE   41 52 48 4C 00         DB   "ARHL",0   
+0AC3   FF 18 01               DB   0FFh,18h,01h   
+0AC6   52 44 45 4C 00         DB   "RDEL",0   
+0ACB   FF 28 02               DB   0FFh,28h,02h   
+0ACE   4C 44 48 49 20 00      DB   "LDHI ",0   
+0AD4   FF 38 02               DB   0FFh,38h,02h   
+0AD7   4C 44 53 49 20 00      DB   "LDSI ",0   
+0ADD   FF CB 01               DB   0FFh,0CBh,01h   
+0AE0   52 53 54 56 00         DB   "RSTV",0   
+0AE5   FF D9 01               DB   0FFh,0D9h,01h   
+0AE8   53 48 4C 58 20 44 00   DB   "SHLX D",0   
+0AEF   FF DD 03               DB   0FFh,0DDh,03h   
+0AF2   4A 4E 4B 20 00         DB   "JNK ",0   
+0AF7   FF ED 01               DB   0FFh,0EDh,01h   
+0AFA   4C 48 4C 58 20 44 00   DB   "LHLX D",0   
+0B01   FF FD 03               DB   0FFh,0FDh,03h   
+0B04   4A 4B 20 00            DB   "JK ",0   
+0B08                             ; Jumps, Calls & Returns
+0B08   FF C3 0B               DB   0FFh,0C3h,0Bh   
+0B0B   4A 4D 50 20 00         DB   "JMP ",0   
+0B10   FF CA 43               DB   0FFh,0CAh,43h   
+0B13   4A 5A 20 00            DB   "JZ ",0   
+0B17   FF C2 4B               DB   0FFh,0C2h,4Bh   
+0B1A   4A 4E 5A 20 00         DB   "JNZ ",0   
+0B1F   FF DA 13               DB   0FFh,0DAh,13h   
+0B22   4A 43 20 00            DB   "JC ",0   
+0B26   FF D2 1B               DB   0FFh,0D2h,1Bh   
+0B29   4A 4E 43 20 00         DB   "JNC ",0   
+0B2E   FF EA 23               DB   0FFh,0EAh,23h   
+0B31   4A 50 45 20 00         DB   "JPE ",0   
+0B36   FF E2 2B               DB   0FFh,0E2h,2Bh   
+0B39   4A 50 4F 20 00         DB   "JPO ",0   
+0B3E   FF FA 83               DB   0FFh,0FAh,83h   
+0B41   4A 4D 20 00            DB   "JM ",0   
+0B45   FF F2 8B               DB   0FFh,0F2h,8Bh   
+0B48   4A 50 20 00            DB   "JP ",0   
+0B4C   FF CD 0B               DB   0FFh,0CDh,0Bh   
+0B4F   43 41 4C 4C 20 00      DB   "CALL ",0   
+0B55   FF CC 43               DB   0FFh,0CCh,43h   
+0B58   43 5A 20 00            DB   "CZ ",0   
+0B5C   FF C4 4B               DB   0FFh,0C4h,4Bh   
+0B5F   43 4E 5A 20 00         DB   "CNZ ",0   
+0B64   FF DC 13               DB   0FFh,0DCh,13h   
+0B67   43 43 20 00            DB   "CC ",0   
+0B6B   FF D4 1B               DB   0FFh,0D4h,1Bh   
+0B6E   43 4E 43 20 00         DB   "CNC ",0   
+0B73   FF EC 23               DB   0FFh,0ECh,23h   
+0B76   43 50 45 20 00         DB   "CPE ",0   
+0B7B   FF E4 2B               DB   0FFh,0E4h,2Bh   
+0B7E   43 50 4F 20 00         DB   "CPO ",0   
+0B83   FF FC 83               DB   0FFh,0FCh,83h   
+0B86   43 4D 20 00            DB   "CM ",0   
+0B8A   FF F4 8B               DB   0FFh,0F4h,8Bh   
+0B8D   43 50 20 00            DB   "CP ",0   
+0B91   FF C9 05               DB   0FFh,0C9h,05h   
+0B94   52 45 54 00            DB   "RET",0   
+0B98   FF C8 45               DB   0FFh,0C8h,45h   
+0B9B   52 5A 00               DB   "RZ",0   
+0B9E   FF C0 4D               DB   0FFh,0C0h,4Dh   
+0BA1   52 4E 5A 00            DB   "RNZ",0   
+0BA5   FF D8 15               DB   0FFh,0D8h,15h   
+0BA8   52 43 00               DB   "RC",0   
+0BAB   FF D0 1D               DB   0FFh,0D0h,1Dh   
+0BAE   52 4E 43 00            DB   "RNC",0   
+0BB2   FF E8 25               DB   0FFh,0E8h,25h   
+0BB5   52 50 45 00            DB   "RPE",0   
+0BB9   FF E0 2D               DB   0FFh,0E0h,2Dh   
+0BBC   52 50 4F 00            DB   "RPO",0   
+0BC0   FF F8 85               DB   0FFh,0F8h,85h   
+0BC3   52 4D 00               DB   "RM",0   
+0BC6   FF F0 8D               DB   0FFh,0F0h,8Dh   
+0BC9   52 50 00               DB   "RP",0   
+0BCC                             ; Register based instructions
+0BCC   C0 40 01               DB   0C0h,40h,01h   
+0BCF   4D 4F 56 20 64 2C 73 00 DB   "MOV d,s",0   
+0BD7   C7 06 02               DB   0C7h,06h,02h   
+0BDA   4D 56 49 20 64 2C 00   DB   "MVI d,",0   
+0BE1   F8 90 01               DB   0F8h,90h,01h   
+0BE4   53 55 42 20 73 00      DB   "SUB s",0   
+0BEA   F8 98 01               DB   0F8h,98h,01h   
+0BED   53 42 42 20 73 00      DB   "SBB s",0   
+0BF3   F8 80 01               DB   0F8h,80h,01h   
+0BF6   41 44 44 20 73 00      DB   "ADD s",0   
+0BFC   F8 88 01               DB   0F8h,88h,01h   
+0BFF   41 44 43 20 73 00      DB   "ADC s",0   
+0C05   F8 A0 01               DB   0F8h,0A0h,01h   
+0C08   41 4E 41 20 73 00      DB   "ANA s",0   
+0C0E   F8 B0 01               DB   0F8h,0B0h,01h   
+0C11   4F 52 41 20 73 00      DB   "ORA s",0   
+0C17   F8 A8 01               DB   0F8h,0A8h,01h   
+0C1A   58 52 41 20 73 00      DB   "XRA s",0   
+0C20   F8 B8 01               DB   0F8h,0B8h,01h   
+0C23   43 4D 50 20 73 00      DB   "CMP s",0   
+0C29   C7 04 01               DB   0C7h,04h,01h   
+0C2C   49 4E 52 20 64 00      DB   "INR d",0   
+0C32   C7 05 01               DB   0C7h,05h,01h   
+0C35   44 43 52 20 64 00      DB   "DCR d",0   
+0C3B                             ; Register pair instructions
+0C3B   CF 01 03               DB   0CFh,01h,03h   
+0C3E   4C 58 49 20 70 2C 00   DB   "LXI p,",0   
+0C45   EF 0A 01               DB   0EFh,0Ah,01h   
+0C48   4C 44 41 58 20 70 00   DB   "LDAX p",0   
+0C4F   EF 02 01               DB   0EFh,02h,01h   
+0C52   53 54 41 58 20 70 00   DB   "STAX p",0   
+0C59   CF 03 01               DB   0CFh,03h,01h   
+0C5C   49 4E 58 20 70 00      DB   "INX p",0   
+0C62   CF 0B 01               DB   0CFh,0Bh,01h   
+0C65   44 43 58 20 70 00      DB   "DCX p",0   
+0C6B   CF 09 01               DB   0CFh,09h,01h   
+0C6E   44 41 44 20 70 00      DB   "DAD p",0   
+0C74   CF C5 01               DB   0CFh,0C5h,01h   
+0C77   50 55 53 48 20 70 00   DB   "PUSH p",0   
+0C7E   CF C1 01               DB   0CFh,0C1h,01h   
+0C81   50 4F 50 20 70 00      DB   "POP p",0   
+0C87                             ; Restart instruction
+0C87   C7 C7 01               DB   0C7h,0C7h,01h   
+0C8A   52 53 54 20 76 00      DB   "RST v",0   
+0C90                             ; This entry always matches invalid opcodes
+0C90   00 00 01               DB   00h,00h,01h   
+0C93   44 42 20 00            DB   "DB ",0   
+0C97                             ; Misc Strings and messages
+0C97   4F 4E 20 00  ON:       DB   "ON ",0   
+0C9B   4F 46 46 00  OFF:      DB   "OFF",0   
+0C9F   41 55 54 4F 52 45 47 3D 00 AUTMSG:   DB   "AUTOREG=",0   
+0CA8   20 53 55 42 54 52 41 43 45 3D 00 SUBMSG:   DB   " SUBTRACE=",0   
+0CB3   20 54 52 41 43 45 3D 00 TRCMSG:   DB   " TRACE=",0   
+0CBB   4D 4F 4E 38 35 20 43 6F 6D 6D 61 6E 64 73 3A HTEXT:   DB   "MON85 Commands:"   
+0CCA   0D 0A 00               DB   0Dh,0Ah,0   
+0CCD   41 20 4F 4E 7C 4F 46 46 21 45 6E 61 62 6C 65 2F 44 69 73 61 62 6C 65 20 41 75 74 6F 6D 61 74 69 63 20 72 65 67 69 73 74 65 72 20 64 69 73 70 6C 61 79 00 DB   "A ON|OFF!Enable/Disable Automatic register display",0   
+0D00   42 20 5B 62 70 20 61 64 64 72 65 73 73 5D 21 53 65 74 2F 44 69 73 70 6C 61 79 20 62 72 65 61 6B 70 6F 69 6E 74 73 00 DB   "B [bp address]!Set/Display breakpoints",0   
+0D27   43 20 3C 73 72 63 3E 20 3C 64 65 73 74 3E 20 3C 73 69 7A 65 3E 21 43 6F 70 79 20 6D 65 6D 6F 72 79 00 DB   "C <src> <dest> <size>!Copy memory",0   
+0D49   44 20 3C 61 64 64 72 65 73 73 3E 21 44 69 73 70 6C 61 79 20 6D 65 6D 6F 72 79 20 69 6E 20 61 73 73 65 6D 62 6C 79 20 66 6F 72 6D 61 74 00 DB   "D <address>!Display memory in assembly format",0   
+0D77   45 20 3C 61 64 64 72 65 73 73 3E 21 45 64 69 74 20 6D 65 6D 6F 72 79 00 DB   "E <address>!Edit memory",0   
+0D8F   46 20 3C 73 74 61 72 74 3E 20 3C 65 6E 64 3E 20 3C 76 61 6C 75 65 3E 21 46 69 6C 6C 20 6D 65 6D 6F 72 79 00 DB   "F <start> <end> <value>!Fill memory",0   
+0DB3   47 20 5B 61 64 64 72 65 73 73 5D 21 42 65 67 69 6E 2F 52 65 73 75 6D 65 20 65 78 65 63 75 74 69 6F 6E 00 DB   "G [address]!Begin/Resume execution",0   
+0DD6   48 20 3C 73 74 61 72 74 3E 20 3C 65 6E 64 3E 21 53 65 6E 64 20 6F 75 74 20 6D 65 6D 6F 72 79 20 69 6E 20 49 6E 74 65 6C 20 48 45 58 20 66 6F 72 6D 61 74 00 DB   "H <start> <end>!Send out memory in Intel HEX format",0   
+0E0A   49 20 3C 70 6F 72 74 3E 21 49 6E 70 75 74 20 66 72 6F 6D 20 70 6F 72 74 00 DB   "I <port>!Input from port",0   
+0E23   4C 20 5B 61 64 64 72 65 73 73 5D 21 4C 6F 61 64 20 69 6D 61 67 65 20 69 6E 74 6F 20 6D 65 6D 6F 72 79 00 DB   "L [address]!Load image into memory",0   
+0E46   4D 20 3C 61 64 64 72 65 73 73 3E 21 44 69 73 70 6C 61 79 20 6D 65 6D 6F 72 79 20 69 6E 20 68 65 78 20 64 75 6D 70 20 66 6F 72 6D 61 74 00 DB   "M <address>!Display memory in hex dump format",0   
+0E74   4F 20 3C 70 6F 72 74 3E 20 3C 64 61 74 61 3E 21 4F 75 74 70 75 74 20 74 6F 20 70 6F 72 74 00 DB   "O <port> <data>!Output to port",0   
+0E93   52 20 5B 72 70 20 76 61 6C 75 65 5D 21 53 65 74 2F 44 69 73 70 6C 61 79 20 70 72 6F 67 72 61 6D 20 72 65 67 69 73 74 65 72 73 00 DB   "R [rp value]!Set/Display program registers",0   
+0EBE   53 20 4F 4E 7C 4F 46 46 21 45 6E 61 62 6C 65 2F 44 69 73 61 62 6C 65 20 53 75 62 72 6F 75 74 69 6E 65 20 74 72 61 63 65 00 DB   "S ON|OFF!Enable/Disable Subroutine trace",0   
+0EE7   54 20 4F 4E 7C 4F 46 46 21 45 6E 61 62 6C 65 2F 44 69 73 61 62 6C 65 20 54 72 61 63 65 20 6D 6F 64 65 00 DB   "T ON|OFF!Enable/Disable Trace mode",0   
+0F0A   55 20 5B 61 64 64 72 65 73 73 5D 21 53 65 74 2F 44 69 73 70 6C 61 79 20 70 72 6F 67 72 61 6D 20 62 61 73 65 20 61 64 64 72 65 73 73 00 DB   "U [address]!Set/Display program base address",0   
+0F37   00                     DB   0   
+0F38                             ; 
+0F38                             ; Read a character, and wait for it
+0F38                             ; 
+0F38   CD B6 0F     INCHR:    CALL   IN   ; Check for a character
+0F3B   A7                     ANA   A   ; Is there any data?
+0F3C   CA 38 0F               JZ   INCHR   ; Wait for it
+0F3F   C9                     RET      
+0F40                             ; 
+0F40                             ; Display HL in hexidecimal
+0F40                             ; 
+0F40   7C           HLOUT:    MOV   A,H   ; Get HIGH byte
+0F41   CD 45 0F               CALL   HPR   ; Output
+0F44   7D                     MOV   A,L   ; Get LOW byte
+0F45                             ; 
+0F45                             ; Display A in hexidecimal
+0F45                             ; 
+0F45   F5           HPR:      PUSH   PSW   ; Save low digit
+0F46   0F                     RRC      ; Shift
+0F47   0F                     RRC      ; high
+0F48   0F                     RRC      ; digit
+0F49   0F                     RRC      ; into low
+0F4A   CD 4E 0F               CALL   HOUT   ; Display a single digit
+0F4D   F1                     POP   PSW   ; Restore low digit
+0F4E   E6 0F        HOUT:     ANI   0Fh   ; Remove high digit
+0F50   FE 0A                  CPI   10   ; Convert to ASCII
+0F52   DE 2F                  SBI   2Fh   
+0F54   27                     DAA      
+0F55   C3 AA 0F               JMP   OUT   ; And output it
+0F58                             ; 
+0F58                             ; Display message [PC]
+0F58                             ; 
+0F58   E1           PRTMSG:   POP   H   ; Get address
+0F59   CD 5D 0F               CALL   PRTSTR   ; Output message
+0F5C   E9                     PCHL      ; And return
+0F5D                             ; 
+0F5D                             ; Display message [HL]
+0F5D                             ; 
+0F5D   7E           PRTSTR:   MOV   A,M   ; Get byte from message
+0F5E   23                     INX   H   ; Advance to next
+0F5F   A7                     ANA   A   ; End of message?
+0F60   C8                     RZ      ; Yes, exit
+0F61   CD AA 0F               CALL   OUT   ; Output the character
+0F64   C3 5D 0F               JMP   PRTSTR   ; And proceed
+0F67                             ; 
+0F67                             ; Handle output suspension
+0F67                             ; 
+0F67   CD A3 0F     CHKSUS:   CALL   CRLF   ; New line
+0F6A   3A AE FF               LDA   OFLAG   ; Is output suspended?
+0F6D   A7                     ANA   A   ; Test flag
+0F6E   C2 7F 0F               JNZ   CHKS1   ; Yes it is
+0F71   CD B6 0F               CALL   IN   ; Test for CONTROL-C interrupt
+0F74   FE 1B                  CPI   1Bh   ; ESCAPE?
+0F76   CA 8D 01               JZ   REST   ; Abort
+0F79   FE 20                  CPI   " "   ; SPACE - Suspend command
+0F7B   C0                     RNZ      
+0F7C   32 AE FF               STA   OFLAG   ; Set the flag
+0F7F                             ; Output is suspended, wait for command
+0F7F   CD 38 0F     CHKS1:    CALL   INCHR   ; Get char
+0F82   FE 20                  CPI   " "   ; One line?
+0F84   C8                     RZ      ; Allow it
+0F85   FE 1B                  CPI   1Bh   ; ESCAPE?
+0F87   CA 8D 01               JZ   REST   ; Abort
+0F8A   FE 0D                  CPI   0Dh   ; Resume?
+0F8C   C2 7F 0F               JNZ   CHKS1   ; Keep going
+0F8F   97                     SUB   A   ; Reset flag
+0F90   32 AE FF               STA   OFLAG   ; Write it
+0F93   C9                     RET      
+0F94                             ; Display a character if its printable
+0F94   FE 20        OUTP:     CPI   " "   ; < " "
+0F96   DA 9E 0F               JC   OUTP1   ; Invalid, exchange it
+0F99   FE 7F                  CPI   7Fh   ; Printable?
+0F9B   DA AA 0F               JC   OUT   ; Ok to display
+0F9E   3E 2E        OUTP1:    MVI   A,"."   ; Set to DOT to indicate invalid
+0FA0   C3 AA 0F               JMP   OUT   ; And display
+0FA3                             ; 
+0FA3                             ; Write a Line-Feed and Carriage-Return to console
+0FA3                             ; 
+0FA3   3E 0D        CRLF:     MVI   A,0Dh   ; Carriage return
+0FA5   CD AA 0F               CALL   OUT   ; Output
+0FA8   3E 0A                  MVI   A,0Ah   ; Line-feed
+0FAA                             ; 
+0FAA                             ; User supplied I/O routines.
+0FAA                             ;-----------------------------------------------------------
+0FAA                             ; NOTE: "OUT" must appear first because "CRLF" falls into it.
+0FAA                             ; 
+0FAA                             ; Write character in A to console (8251 uart)
+0FAA                OUT:         
+0FAA   F5                     PUSH   PSW   ; Save char
+0FAB                OUT1:        
+0FAB   DB 01                  IN   01h   ; Get UART status
+0FAD   E6 04                  ANI   00000100b   ; Test for TxRDY = 1
+0FAF   CA AB 0F               JZ   OUT1   ; Not ready - try again
+0FB2   F1                     POP   PSW   ; Restore char
+0FB3   D3 03                  OUT   03h   ; Write char
+0FB5   C9                     RET      
+0FB6                             ; 
+0FB6                             ; Check for a character from the console (SCC2691 UART)
+0FB6   DB 01        IN:       IN   01h   ; Get UART status
+0FB8   E6 01                  ANI   00000001b   ; Test for RxRDY bit = 1
+0FBA   C8                     RZ      ; No char
+0FBB   DB 03                  IN   03h   ; Get received data
+0FBD   C9                     RET      
+0FBE                             ; 
+0FBE                             ; Initialize the SCC2691 UART
+0FBE                             ; Accessed with any I/O address between 0x00 .. 0x3F
+0FBE                             ; 
+0FBE                INIT:        
+0FBE   3E 10                  MVI   A,00010000b   ; load the RESET MR POINTER command
+0FC0   D3 02                  OUT   02h   ; write to COMMAND REGISTER
+0FC2   3E 13                  MVI   A,00010011b   ; 8 DATA BITS + NO PARITY
+0FC4   D3 00                  OUT   00h   ; write to MODE REGISTER #1
+0FC6   3E 07                  MVI   A,00000111b   ; 1 STOP BIT
+0FC8   D3 00                  OUT   00h   ; write to MODE REGISTER #2
+0FCA   3E BB                  MVI   A,10111011b   ; 9600 BAUD for RX & TX
+0FCC   D3 01                  OUT   01h   ; write to CLOCK SELECT REGISTER
+0FCE   3E 00                  MVI   A,0   ; no interrupts
+0FD0   D3 05                  OUT   05h   ; write to INTERRUPT MASK REGISTER
+0FD2   3E 05                  MVI   A,00000101b   ; enable TX & RX
+0FD4   D3 02                  OUT   02h   ; write to COMMAND REGISTER
+0FD6   21 DD 0F               LXI   H,HW_MSG   
+0FD9   CD 5D 0F               CALL   PRTSTR   
+0FDC   C9                     RET      
+0FDD                             ; 
+0FDD                HW_MSG:      
+0FDD   0D 0A 0D 0A            DB   0Dh,0Ah,0Dh,0Ah   
+0FE1   52 65 74 72 6F 44 75 69 6E 6F 2D 38 30 38 35 20 53 43 43 32 36 39 31 20 55 41 52 54 20 2D 20 52 4F 4D 20 4D 6F 6E 69 74 6F 72 20 56 61 72 69 61 6E 74 2E 0D 0A DB   "RetroDuino-8085 SCC2691 UART - ROM Monitor Variant.",0Dh,0Ah   
+1016   52 41 4D 20 69 73 20 61 76 61 69 6C 61 62 6C 65 20 66 72 6F 6D 20 30 78 34 30 30 30 20 2E 2E 20 30 78 46 46 46 46 DB   "RAM is available from 0x4000 .. 0xFFFF"   
+103C   0D 0A 0D 0A 00         DB   0Dh,0Ah,0Dh,0Ah,0   
+
+
+ROM:                0000 DEFINED AT LINE 31
+                    > USED AT LINE 57
+DRAM:               FFA0 DEFINED AT LINE 32
+                    > USED AT LINE 37
+UBASE:              FFA0 DEFINED AT LINE 39
+                    > USED AT LINE 109
+                    > USED AT LINE 222
+                    > USED AT LINE 223
+                    > USED AT LINE 230
+                    > USED AT LINE 851
+                    > USED AT LINE 855
+                    > USED AT LINE 1039
+HL:                 FFA2 DEFINED AT LINE 40
+                    > USED AT LINE 125
+                    > USED AT LINE 481
+                    > USED AT LINE 606
+                    > USED AT LINE 633
+                    > USED AT LINE 1204
+DE:                 FFA4 DEFINED AT LINE 41
+                    > USED AT LINE 127
+                    > USED AT LINE 604
+                    > USED AT LINE 637
+                    > USED AT LINE 1201
+BC:                 FFA6 DEFINED AT LINE 42
+                    > USED AT LINE 132
+                    > USED AT LINE 598
+                    > USED AT LINE 641
+                    > USED AT LINE 1198
+PSW:                FFA8 DEFINED AT LINE 43
+                    > USED AT LINE 107
+                    > USED AT LINE 111
+                    > USED AT LINE 133
+                    > USED AT LINE 135
+                    > USED AT LINE 424
+                    > USED AT LINE 426
+                    > USED AT LINE 485
+                    > USED AT LINE 496
+                    > USED AT LINE 509
+                    > USED AT LINE 601
+                    > USED AT LINE 603
+                    > USED AT LINE 652
+                    > USED AT LINE 1215
+                    > USED AT LINE 1219
+                    > USED AT LINE 1266
+                    > USED AT LINE 1287
+                    > USED AT LINE 1290
+                    > USED AT LINE 1319
+                    > USED AT LINE 1324
+                    > USED AT LINE 1327
+                    > USED AT LINE 1667
+                    > USED AT LINE 1673
+                    > USED AT LINE 1738
+                    > USED AT LINE 1743
+SP:                 FFAA DEFINED AT LINE 44
+                    > USED AT LINE 59
+                    > USED AT LINE 137
+                    > USED AT LINE 138
+                    > USED AT LINE 139
+                    > USED AT LINE 231
+                    > USED AT LINE 235
+                    > USED AT LINE 554
+                    > USED AT LINE 559
+                    > USED AT LINE 564
+                    > USED AT LINE 569
+                    > USED AT LINE 596
+                    > USED AT LINE 645
+                    > USED AT LINE 1207
+PC:                 FFAC DEFINED AT LINE 45
+                    > USED AT LINE 129
+                    > USED AT LINE 140
+                    > USED AT LINE 142
+                    > USED AT LINE 192
+                    > USED AT LINE 437
+                    > USED AT LINE 449
+                    > USED AT LINE 656
+                    > USED AT LINE 1210
+OFLAG:              FFAE DEFINED AT LINE 46
+                    > USED AT LINE 304
+                    > USED AT LINE 804
+                    > USED AT LINE 841
+                    > USED AT LINE 1698
+                    > USED AT LINE 1706
+                    > USED AT LINE 1716
+TFLAG:              FFAF DEFINED AT LINE 47
+                    > USED AT LINE 182
+                    > USED AT LINE 419
+                    > USED AT LINE 438
+                    > USED AT LINE 467
+                    > USED AT LINE 687
+SFLAG:              FFB0 DEFINED AT LINE 48
+                    > USED AT LINE 229
+                    > USED AT LINE 416
+                    > USED AT LINE 548
+                    > USED AT LINE 681
+AFLAG:              FFB1 DEFINED AT LINE 49
+                    > USED AT LINE 185
+                    > USED AT LINE 196
+                    > USED AT LINE 413
+                    > USED AT LINE 675
+BRKTAB:             FFB2 DEFINED AT LINE 50
+                    > USED AT LINE 143
+                    > USED AT LINE 168
+                    > USED AT LINE 362
+                    > USED AT LINE 379
+                    > USED AT LINE 581
+INST:               FFCA DEFINED AT LINE 51
+                    > USED AT LINE 336
+                    > USED AT LINE 337
+                    > USED AT LINE 340
+                    > USED AT LINE 349
+                    > USED AT LINE 350
+                    > USED AT LINE 352
+                    > USED AT LINE 447
+                    > USED AT LINE 448
+                    > USED AT LINE 456
+                    > USED AT LINE 465
+                    > USED AT LINE 466
+                    > USED AT LINE 471
+                    > USED AT LINE 475
+                    > USED AT LINE 478
+                    > USED AT LINE 488
+                    > USED AT LINE 541
+                    > USED AT LINE 561
+                    > USED AT LINE 577
+                    > USED AT LINE 578
+                    > USED AT LINE 607
+BUFFER:             FFD0 DEFINED AT LINE 52
+                    > USED AT LINE 473
+                    > USED AT LINE 551
+                    > USED AT LINE 573
+                    > USED AT LINE 610
+                    > USED AT LINE 929
+                    > USED AT LINE 933
+                    > USED AT LINE 934
+                    > USED AT LINE 1028
+                    > USED AT LINE 1033
+                    > USED AT LINE 1038
+                    > USED AT LINE 1043
+                    > USED AT LINE 1050
+                    > USED AT LINE 1084
+                    > USED AT LINE 1098
+                    > USED AT LINE 1108
+                    > USED AT LINE 1120
+                    > USED AT LINE 1369
+                    > USED AT LINE 1426
+DSTACK:             0000 DEFINED AT LINE 53
+                    > USED AT LINE 59
+                    > USED AT LINE 139
+                    > USED AT LINE 223
+                    > USED AT LINE 235
+RST1:               0008 DEFINED AT LINE 71
+RST15:              000C DEFINED AT LINE 73
+RST2:               0010 DEFINED AT LINE 75
+RST25:              0014 DEFINED AT LINE 77
+RST3:               0018 DEFINED AT LINE 79
+RST35:              001C DEFINED AT LINE 81
+RST4:               0020 DEFINED AT LINE 83
+TRAP:               0024 DEFINED AT LINE 85
+RST5:               0028 DEFINED AT LINE 87
+RST55:              002C DEFINED AT LINE 89
+RST6:               0030 DEFINED AT LINE 91
+RST65:              0034 DEFINED AT LINE 93
+RST7:               0038 DEFINED AT LINE 95
+RST75:              003C DEFINED AT LINE 97
+RST8:               0040 DEFINED AT LINE 99
+RSTINT:             0044 DEFINED AT LINE 106
+                    > USED AT LINE 73
+                    > USED AT LINE 75
+                    > USED AT LINE 77
+                    > USED AT LINE 79
+                    > USED AT LINE 81
+                    > USED AT LINE 83
+                    > USED AT LINE 85
+                    > USED AT LINE 87
+                    > USED AT LINE 89
+                    > USED AT LINE 91
+                    > USED AT LINE 93
+                    > USED AT LINE 95
+                    > USED AT LINE 97
+                    > USED AT LINE 99
+RTAB:               004E DEFINED AT LINE 119
+                    > USED AT LINE 1409
+RPTAB:              0056 DEFINED AT LINE 120
+                    > USED AT LINE 1392
+ENTRY:              005A DEFINED AT LINE 125
+                    > USED AT LINE 71
+                    > USED AT LINE 612
+TRYBRK:             0085 DEFINED AT LINE 146
+                    > USED AT LINE 158
+NOTBRK:             0091 DEFINED AT LINE 154
+                    > USED AT LINE 151
+FOUND:              009C DEFINED AT LINE 162
+                    > USED AT LINE 153
+NOBK:               00B5 DEFINED AT LINE 168
+                    > USED AT LINE 160
+FIXL:               00BA DEFINED AT LINE 170
+                    > USED AT LINE 181
+NOFIX:              00C5 DEFINED AT LINE 179
+                    > USED AT LINE 176
+TRTB:               00DB DEFINED AT LINE 190
+                    > USED AT LINE 184
+                    > USED AT LINE 207
+                    > USED AT LINE 440
+TRL:                00F3 DEFINED AT LINE 199
+                    > USED AT LINE 205
+TEST:               010B DEFINED AT LINE 211
+                    > USED AT LINE 60
+INIL1:              0177 DEFINED AT LINE 224
+                    > USED AT LINE 227
+RECR:               018A DEFINED AT LINE 233
+                    > USED AT LINE 203
+                    > USED AT LINE 253
+                    > USED AT LINE 329
+                    > USED AT LINE 342
+                    > USED AT LINE 853
+                    > USED AT LINE 1087
+REST:               018D DEFINED AT LINE 235
+                    > USED AT LINE 188
+                    > USED AT LINE 298
+                    > USED AT LINE 353
+                    > USED AT LINE 377
+                    > USED AT LINE 422
+                    > USED AT LINE 619
+                    > USED AT LINE 634
+                    > USED AT LINE 638
+                    > USED AT LINE 642
+                    > USED AT LINE 646
+                    > USED AT LINE 653
+                    > USED AT LINE 657
+                    > USED AT LINE 676
+                    > USED AT LINE 682
+                    > USED AT LINE 688
+                    > USED AT LINE 747
+                    > USED AT LINE 771
+                    > USED AT LINE 783
+                    > USED AT LINE 798
+                    > USED AT LINE 856
+                    > USED AT LINE 890
+                    > USED AT LINE 951
+                    > USED AT LINE 1703
+                    > USED AT LINE 1712
+REST1:              019E DEFINED AT LINE 242
+                    > USED AT LINE 249
+ERROR:              01AA DEFINED AT LINE 251
+                    > USED AT LINE 361
+                    > USED AT LINE 648
+                    > USED AT LINE 655
+                    > USED AT LINE 661
+                    > USED AT LINE 667
+                    > USED AT LINE 742
+                    > USED AT LINE 866
+                    > USED AT LINE 1152
+                    > USED AT LINE 1165
+                    > USED AT LINE 1182
+REST2:              01B2 DEFINED AT LINE 255
+                    > USED AT LINE 245
+CTABLE:             01BB DEFINED AT LINE 263
+                    > USED AT LINE 241
+HELP:               01F1 DEFINED AT LINE 302
+                    > USED AT LINE 296
+HELP1:              01F8 DEFINED AT LINE 306
+                    > USED AT LINE 328
+HELP2:              01FA DEFINED AT LINE 307
+                    > USED AT LINE 315
+                    > USED AT LINE 323
+HELP3:              020C DEFINED AT LINE 317
+                    > USED AT LINE 312
+                    > USED AT LINE 319
+HELP4:              021E DEFINED AT LINE 325
+                    > USED AT LINE 310
+INPUT:              0229 DEFINED AT LINE 333
+                    > USED AT LINE 280
+OUTPUT:             0248 DEFINED AT LINE 346
+                    > USED AT LINE 286
+SETBRK:             025E DEFINED AT LINE 357
+                    > USED AT LINE 266
+SBRLP:              026F DEFINED AT LINE 364
+                    > USED AT LINE 366
+DISBRK:             0283 DEFINED AT LINE 379
+                    > USED AT LINE 357
+DISLP:              0288 DEFINED AT LINE 381
+                    > USED AT LINE 410
+NOTSET:             02A5 DEFINED AT LINE 397
+                    > USED AT LINE 393
+GIVLF:              02AD DEFINED AT LINE 399
+                    > USED AT LINE 395
+DISON:              02E8 DEFINED AT LINE 424
+                    > USED AT LINE 414
+                    > USED AT LINE 417
+                    > USED AT LINE 420
+GO:                 02FA DEFINED AT LINE 435
+                    > USED AT LINE 276
+NOHEX:              0303 DEFINED AT LINE 438
+                    > USED AT LINE 435
+NOADR:              030A DEFINED AT LINE 444
+                    > USED AT LINE 201
+GOSET:              0321 DEFINED AT LINE 457
+                    > USED AT LINE 462
+NOPCHL:             0356 DEFINED AT LINE 483
+                    > USED AT LINE 480
+NORSTV:             0369 DEFINED AT LINE 490
+                    > USED AT LINE 484
+JNKJK:              0373 DEFINED AT LINE 494
+                    > USED AT LINE 491
+NOJNK:              0382 DEFINED AT LINE 501
+                    > USED AT LINE 493
+NOCOM:              039B DEFINED AT LINE 512
+                    > USED AT LINE 510
+CARRY:              03A9 DEFINED AT LINE 521
+SIGN:               03AF DEFINED AT LINE 525
+                    > USED AT LINE 515
+ZERO:               03B5 DEFINED AT LINE 529
+                    > USED AT LINE 517
+PARITY:             03BB DEFINED AT LINE 533
+                    > USED AT LINE 519
+ENFLG:              03BE DEFINED AT LINE 536
+                    > USED AT LINE 523
+                    > USED AT LINE 527
+                    > USED AT LINE 531
+GOJMP:              03C7 DEFINED AT LINE 541
+                    > USED AT LINE 503
+PADR:               03D6 DEFINED AT LINE 548
+                    > USED AT LINE 543
+NOPSH:              03EC DEFINED AT LINE 561
+                    > USED AT LINE 499
+                    > USED AT LINE 546
+CALRET:             03F2 DEFINED AT LINE 564
+                    > USED AT LINE 505
+                    > USED AT LINE 539
+HLJMP:              03FD DEFINED AT LINE 572
+                    > USED AT LINE 482
+                    > USED AT LINE 562
+NOTRC:              040A DEFINED AT LINE 581
+                    > USED AT LINE 469
+                    > USED AT LINE 487
+                    > USED AT LINE 489
+                    > USED AT LINE 500
+                    > USED AT LINE 507
+                    > USED AT LINE 536
+                    > USED AT LINE 550
+RESBP:              040F DEFINED AT LINE 583
+                    > USED AT LINE 594
+NORES:              041B DEFINED AT LINE 592
+                    > USED AT LINE 590
+FAKE:               0438 DEFINED AT LINE 609
+                    > USED AT LINE 474
+REGIST:             0440 DEFINED AT LINE 616
+                    > USED AT LINE 288
+CHG1:               0449 DEFINED AT LINE 621
+                    > USED AT LINE 616
+CHG2:               0451 DEFINED AT LINE 626
+                    > USED AT LINE 627
+OKCH:               0457 DEFINED AT LINE 629
+                    > USED AT LINE 624
+CDE:                0466 DEFINED AT LINE 635
+                    > USED AT LINE 632
+CBC:                0471 DEFINED AT LINE 639
+                    > USED AT LINE 636
+CSP:                047C DEFINED AT LINE 643
+                    > USED AT LINE 640
+CP:                 0487 DEFINED AT LINE 647
+                    > USED AT LINE 644
+CPC:                0498 DEFINED AT LINE 654
+                    > USED AT LINE 651
+ONOFF:              04A3 DEFINED AT LINE 659
+                    > USED AT LINE 674
+                    > USED AT LINE 680
+                    > USED AT LINE 686
+RETON:              04BB DEFINED AT LINE 669
+                    > USED AT LINE 665
+AUTO:               04BD DEFINED AT LINE 674
+                    > USED AT LINE 264
+SUBON:              04C6 DEFINED AT LINE 680
+                    > USED AT LINE 290
+TRACE:              04CF DEFINED AT LINE 686
+                    > USED AT LINE 292
+EDIT:               04D8 DEFINED AT LINE 692
+                    > USED AT LINE 272
+EDIT1:              04DB DEFINED AT LINE 693
+                    > USED AT LINE 703
+                    > USED AT LINE 707
+                    > USED AT LINE 716
+                    > USED AT LINE 728
+EDIT2:              0501 DEFINED AT LINE 713
+                    > USED AT LINE 719
+EDIT3:              050C DEFINED AT LINE 721
+                    > USED AT LINE 710
+                    > USED AT LINE 727
+FILL:               051C DEFINED AT LINE 732
+                    > USED AT LINE 274
+FILL1:              0531 DEFINED AT LINE 743
+                    > USED AT LINE 746
+COMP16:             053C DEFINED AT LINE 751
+                    > USED AT LINE 741
+                    > USED AT LINE 745
+                    > USED AT LINE 772
+                    > USED AT LINE 865
+COPY:               0542 DEFINED AT LINE 760
+                    > USED AT LINE 268
+COPY1:              055C DEFINED AT LINE 775
+                    > USED AT LINE 782
+COPY2:              0569 DEFINED AT LINE 785
+                    > USED AT LINE 773
+COPY3:              056E DEFINED AT LINE 790
+                    > USED AT LINE 797
+MEMRY:              057B DEFINED AT LINE 802
+                    > USED AT LINE 284
+ALOOP:              0582 DEFINED AT LINE 805
+                    > USED AT LINE 833
+ALP1:               0588 DEFINED AT LINE 808
+                    > USED AT LINE 820
+AL2:                05A4 DEFINED AT LINE 822
+                    > USED AT LINE 824
+AL3:                05AE DEFINED AT LINE 827
+                    > USED AT LINE 831
+GODIS:              05BD DEFINED AT LINE 837
+                    > USED AT LINE 270
+VLOOP:              05C6 DEFINED AT LINE 842
+                    > USED AT LINE 844
+USRBASE:            05CF DEFINED AT LINE 848
+                    > USED AT LINE 294
+USRB1:              05E4 DEFINED AT LINE 854
+                    > USED AT LINE 848
+SNDHEX:             05ED DEFINED AT LINE 860
+                    > USED AT LINE 278
+SNDHX1:             0603 DEFINED AT LINE 874
+                    > USED AT LINE 886
+SNDHX2:             0615 DEFINED AT LINE 885
+                    > USED AT LINE 880
+                    > USED AT LINE 883
+SNDHX3:             061B DEFINED AT LINE 888
+                    > USED AT LINE 876
+SHXRC:              062F DEFINED AT LINE 892
+                    > USED AT LINE 885
+SHXRC1:             064B DEFINED AT LINE 909
+                    > USED AT LINE 917
+LOAD:               0661 DEFINED AT LINE 926
+                    > USED AT LINE 282
+LOAD1:              066E DEFINED AT LINE 932
+                    > USED AT LINE 927
+LOAD2:              0677 DEFINED AT LINE 936
+                    > USED AT LINE 938
+DLBAD:              0683 DEFINED AT LINE 941
+                    > USED AT LINE 937
+DLWAIT:             0694 DEFINED AT LINE 945
+                    > USED AT LINE 939
+                    > USED AT LINE 948
+DLWAIT1:            0696 DEFINED AT LINE 946
+                    > USED AT LINE 950
+DLREC:              06A4 DEFINED AT LINE 955
+                    > USED AT LINE 936
+                    > USED AT LINE 959
+                    > USED AT LINE 963
+DLMOT:              06B1 DEFINED AT LINE 961
+DMOT1:              06D9 DEFINED AT LINE 981
+                    > USED AT LINE 987
+DLINT:              06EB DEFINED AT LINE 994
+                    > USED AT LINE 957
+DLINT1:             0708 DEFINED AT LINE 1011
+                    > USED AT LINE 1017
+DLEOF:              0719 DEFINED AT LINE 1023
+                    > USED AT LINE 965
+                    > USED AT LINE 996
+SETOFF:             071B DEFINED AT LINE 1028
+                    > USED AT LINE 980
+                    > USED AT LINE 1007
+SETOF1:             0728 DEFINED AT LINE 1037
+                    > USED AT LINE 1030
+GETBYT:             0740 DEFINED AT LINE 1056
+                    > USED AT LINE 968
+                    > USED AT LINE 972
+                    > USED AT LINE 976
+                    > USED AT LINE 981
+                    > USED AT LINE 988
+                    > USED AT LINE 994
+                    > USED AT LINE 999
+                    > USED AT LINE 1003
+                    > USED AT LINE 1008
+                    > USED AT LINE 1011
+                    > USED AT LINE 1018
+GETNIB:             074D DEFINED AT LINE 1066
+                    > USED AT LINE 1056
+                    > USED AT LINE 1062
+GETN1:              0762 DEFINED AT LINE 1076
+                    > USED AT LINE 1068
+                    > USED AT LINE 1073
+DLERR:              0764 DEFINED AT LINE 1079
+                    > USED AT LINE 967
+INPT:               0767 DEFINED AT LINE 1084
+                    > USED AT LINE 238
+                    > USED AT LINE 700
+INPT1:              076A DEFINED AT LINE 1085
+                    > USED AT LINE 1105
+                    > USED AT LINE 1116
+INPT2:              078D DEFINED AT LINE 1104
+                    > USED AT LINE 1100
+                    > USED AT LINE 1110
+INPT3:              0793 DEFINED AT LINE 1107
+                    > USED AT LINE 1093
+                    > USED AT LINE 1095
+INPT4:              07A8 DEFINED AT LINE 1118
+                    > USED AT LINE 1089
+SKIP:               07B0 DEFINED AT LINE 1122
+                    > USED AT LINE 260
+                    > USED AT LINE 659
+                    > USED AT LINE 726
+                    > USED AT LINE 1125
+                    > USED AT LINE 1159
+GETCHI:             07BB DEFINED AT LINE 1131
+                    > USED AT LINE 622
+                    > USED AT LINE 662
+GETCHR:             07BC DEFINED AT LINE 1132
+                    > USED AT LINE 626
+                    > USED AT LINE 1162
+TOCAP:              07C0 DEFINED AT LINE 1139
+                    > USED AT LINE 1127
+TOCAP1:             07C7 DEFINED AT LINE 1142
+                    > USED AT LINE 1140
+CALC8:              07CC DEFINED AT LINE 1149
+                    > USED AT LINE 333
+                    > USED AT LINE 346
+                    > USED AT LINE 351
+                    > USED AT LINE 359
+                    > USED AT LINE 722
+                    > USED AT LINE 736
+CALC:               07D6 DEFINED AT LINE 1158
+                    > USED AT LINE 368
+                    > USED AT LINE 436
+                    > USED AT LINE 629
+                    > USED AT LINE 692
+                    > USED AT LINE 732
+                    > USED AT LINE 734
+                    > USED AT LINE 760
+                    > USED AT LINE 762
+                    > USED AT LINE 764
+                    > USED AT LINE 802
+                    > USED AT LINE 837
+                    > USED AT LINE 854
+                    > USED AT LINE 860
+                    > USED AT LINE 862
+                    > USED AT LINE 928
+                    > USED AT LINE 1149
+CALC1:              07DE DEFINED AT LINE 1162
+                    > USED AT LINE 1177
+CALC2:              07F7 DEFINED AT LINE 1174
+                    > USED AT LINE 1172
+CALC3:              07FE DEFINED AT LINE 1179
+                    > USED AT LINE 1163
+VALHEX:             0805 DEFINED AT LINE 1185
+                    > USED AT LINE 1164
+REGDIS:             0813 DEFINED AT LINE 1198
+                    > USED AT LINE 187
+                    > USED AT LINE 198
+                    > USED AT LINE 206
+                    > USED AT LINE 618
+OUTPT:              0888 DEFINED AT LINE 1238
+                    > USED AT LINE 1200
+                    > USED AT LINE 1203
+                    > USED AT LINE 1206
+                    > USED AT LINE 1209
+                    > USED AT LINE 1212
+HLOUT2:             0895 DEFINED AT LINE 1244
+                    > USED AT LINE 805
+                    > USED AT LINE 1216
+SPACE:              089B DEFINED AT LINE 1247
+                    > USED AT LINE 317
+                    > USED AT LINE 322
+                    > USED AT LINE 694
+                    > USED AT LINE 810
+                    > USED AT LINE 813
+                    > USED AT LINE 817
+                    > USED AT LINE 822
+                    > USED AT LINE 1245
+                    > USED AT LINE 1263
+                    > USED AT LINE 1275
+                    > USED AT LINE 1280
+                    > USED AT LINE 1281
+                    > USED AT LINE 1282
+                    > USED AT LINE 1301
+                    > USED AT LINE 1316
+OUTB:               08A0 DEFINED AT LINE 1250
+                    > USED AT LINE 1221
+                    > USED AT LINE 1223
+                    > USED AT LINE 1225
+                    > USED AT LINE 1227
+                    > USED AT LINE 1229
+                    > USED AT LINE 1231
+                    > USED AT LINE 1233
+                    > USED AT LINE 1235
+DINST:              08AA DEFINED AT LINE 1258
+                    > USED AT LINE 194
+                    > USED AT LINE 842
+VLP1:               08C1 DEFINED AT LINE 1272
+                    > USED AT LINE 1278
+VLP2:               08CE DEFINED AT LINE 1280
+                    > USED AT LINE 1284
+PCHR:               08E5 DEFINED AT LINE 1294
+                    > USED AT LINE 1299
+SPLP:               08EF DEFINED AT LINE 1301
+                    > USED AT LINE 1303
+VLP3:               08F8 DEFINED AT LINE 1305
+                    > USED AT LINE 1312
+                    > USED AT LINE 1315
+VOUT:               0907 DEFINED AT LINE 1314
+                    > USED AT LINE 1317
+VOUT1:              0911 DEFINED AT LINE 1319
+                    > USED AT LINE 1307
+T2:                 0917 DEFINED AT LINE 1324
+T1:                 0927 DEFINED AT LINE 1334
+                    > USED AT LINE 1322
+T3:                 0929 DEFINED AT LINE 1337
+                    > USED AT LINE 1329
+LOOK:               0937 DEFINED AT LINE 1350
+                    > USED AT LINE 451
+                    > USED AT LINE 1264
+LOOK1:              093D DEFINED AT LINE 1354
+                    > USED AT LINE 1365
+LOOK2:              0945 DEFINED AT LINE 1361
+                    > USED AT LINE 1364
+LOOK3:              094E DEFINED AT LINE 1367
+                    > USED AT LINE 1359
+LOOK4:              0953 DEFINED AT LINE 1370
+                    > USED AT LINE 1424
+LOOK5:              0965 DEFINED AT LINE 1383
+                    > USED AT LINE 1374
+LOOK6:              0978 DEFINED AT LINE 1395
+                    > USED AT LINE 1384
+LOOK7:              0984 DEFINED AT LINE 1403
+                    > USED AT LINE 1396
+LOOK8:              098A DEFINED AT LINE 1407
+                    > USED AT LINE 1401
+LOOK9:              0990 DEFINED AT LINE 1411
+                    > USED AT LINE 1393
+LOOK9A:             099C DEFINED AT LINE 1419
+                    > USED AT LINE 1415
+LOOK10:             099D DEFINED AT LINE 1421
+                    > USED AT LINE 1381
+                    > USED AT LINE 1404
+ITABLE:             09A9 DEFINED AT LINE 1433
+                    > USED AT LINE 1353
+ON:                 0C97 DEFINED AT LINE 1627
+                    > USED AT LINE 430
+OFF:                0C9B DEFINED AT LINE 1628
+                    > USED AT LINE 427
+AUTMSG:             0C9F DEFINED AT LINE 1629
+                    > USED AT LINE 412
+SUBMSG:             0CA8 DEFINED AT LINE 1630
+                    > USED AT LINE 415
+TRCMSG:             0CB3 DEFINED AT LINE 1631
+                    > USED AT LINE 418
+HTEXT:              0CBB DEFINED AT LINE 1632
+                    > USED AT LINE 302
+INCHR:              0F38 DEFINED AT LINE 1654
+                    > USED AT LINE 199
+                    > USED AT LINE 955
+                    > USED AT LINE 961
+                    > USED AT LINE 1066
+                    > USED AT LINE 1085
+                    > USED AT LINE 1656
+                    > USED AT LINE 1708
+HLOUT:              0F40 DEFINED AT LINE 1661
+                    > USED AT LINE 394
+                    > USED AT LINE 693
+                    > USED AT LINE 852
+                    > USED AT LINE 1244
+HPR:                0F45 DEFINED AT LINE 1667
+                    > USED AT LINE 341
+                    > USED AT LINE 696
+                    > USED AT LINE 809
+                    > USED AT LINE 896
+                    > USED AT LINE 901
+                    > USED AT LINE 906
+                    > USED AT LINE 908
+                    > USED AT LINE 914
+                    > USED AT LINE 921
+                    > USED AT LINE 1260
+                    > USED AT LINE 1262
+                    > USED AT LINE 1274
+                    > USED AT LINE 1332
+                    > USED AT LINE 1340
+                    > USED AT LINE 1343
+                    > USED AT LINE 1662
+HOUT:               0F4E DEFINED AT LINE 1674
+                    > USED AT LINE 1672
+PRTMSG:             0F58 DEFINED AT LINE 1682
+                    > USED AT LINE 162
+                    > USED AT LINE 190
+                    > USED AT LINE 212
+                    > USED AT LINE 236
+                    > USED AT LINE 338
+                    > USED AT LINE 397
+                    > USED AT LINE 849
+                    > USED AT LINE 888
+                    > USED AT LINE 941
+                    > USED AT LINE 1112
+                    > USED AT LINE 1213
+                    > USED AT LINE 1217
+PRTSTR:             0F5D DEFINED AT LINE 1688
+                    > USED AT LINE 425
+                    > USED AT LINE 429
+                    > USED AT LINE 431
+                    > USED AT LINE 1683
+                    > USED AT LINE 1693
+                    > USED AT LINE 1772
+CHKSUS:             0F67 DEFINED AT LINE 1697
+                    > USED AT LINE 325
+                    > USED AT LINE 832
+                    > USED AT LINE 843
+CHKS1:              0F7F DEFINED AT LINE 1708
+                    > USED AT LINE 1700
+                    > USED AT LINE 1714
+OUTP:               0F94 DEFINED AT LINE 1719
+                    > USED AT LINE 828
+                    > USED AT LINE 1296
+OUTP1:              0F9E DEFINED AT LINE 1723
+                    > USED AT LINE 1720
+CRLF:               0FA3 DEFINED AT LINE 1728
+                    > USED AT LINE 166
+                    > USED AT LINE 195
+                    > USED AT LINE 233
+                    > USED AT LINE 404
+                    > USED AT LINE 411
+                    > USED AT LINE 421
+                    > USED AT LINE 922
+                    > USED AT LINE 1119
+                    > USED AT LINE 1236
+                    > USED AT LINE 1697
+OUT:                0FAA DEFINED AT LINE 1737
+                    > USED AT LINE 165
+                    > USED AT LINE 252
+                    > USED AT LINE 313
+                    > USED AT LINE 321
+                    > USED AT LINE 382
+                    > USED AT LINE 384
+                    > USED AT LINE 386
+                    > USED AT LINE 400
+                    > USED AT LINE 401
+                    > USED AT LINE 698
+                    > USED AT LINE 893
+                    > USED AT LINE 1104
+                    > USED AT LINE 1239
+                    > USED AT LINE 1241
+                    > USED AT LINE 1243
+                    > USED AT LINE 1248
+                    > USED AT LINE 1252
+                    > USED AT LINE 1254
+                    > USED AT LINE 1308
+                    > USED AT LINE 1326
+                    > USED AT LINE 1678
+                    > USED AT LINE 1692
+                    > USED AT LINE 1722
+                    > USED AT LINE 1724
+                    > USED AT LINE 1729
+OUT1:               0FAB DEFINED AT LINE 1739
+                    > USED AT LINE 1742
+IN:                 0FB6 DEFINED AT LINE 1748
+                    > USED AT LINE 946
+                    > USED AT LINE 1654
+                    > USED AT LINE 1701
+INIT:               0FBE DEFINED AT LINE 1757
+                    > USED AT LINE 211
+HW_MSG:             0FDD DEFINED AT LINE 1775
+                    > USED AT LINE 1771

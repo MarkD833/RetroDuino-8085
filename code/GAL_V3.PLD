@@ -1,0 +1,63 @@
+Name       8085_UNO_PLD_1;
+Partno     ATF16V8B;
+Date       28/11/23;
+Revision   03;
+Designer   MARK D;
+Company    @HOME;
+Assembly   U3;
+Location   PLANET EARTH;
+Device     G16V8;
+
+/* Inputs */
+/* ROMDIS from the 8085 SOD pin is LOW on power on */
+PIN    1   = ALE;
+PIN    2   = IO_M;
+PIN    3   = RD;
+PIN    4   = WR;
+PIN    5   = ROMDIS;
+PIN    6   = A15;
+PIN    7   = A14;
+PIN    8   = UART_INT;
+PIN    9   = VIA_INT;
+
+
+/* Outputs */
+/* ROMDIS2 isn't used externally - it's just the output of the D-type latch */
+PIN    12  = RST75;
+PIN    13  = RST65;
+PIN    14  = !CS_ADC;
+PIN    15  = !CS_VIA;
+PIN    16  = !CS_UART;
+PIN    17  = ROMDIS2;
+PIN    18  = !CS_RAM;
+PIN    19  = !CS_ROM;
+
+/* ROMDIS from 8085 SOD pin: 0=ROM Enabled (default), 1=ROM Disabled - clocked by the ALE signal */
+ROMDIS2.D  = ROMDIS;
+
+/* ROM: 0x0000 - 0x3FFF any READ IF ROMDIS=0 */
+CS_ROM    = !IO_M & !RD & !A15 & !A14 & !ROMDIS2;
+
+/* RAM: 0x0000 - 0xFFFF any WRITE */
+/* RAM: 0x4000 - 0xFFFF any READ IF ROMDIS2=0 */
+/* RAM: 0x0000 - 0xFFFF any READ IF ROMDIS2=1 */
+CS_RAM    = !IO_M & !WR
+#           !IO_M & !RD & ROMDIS2
+#           !IO_M & !RD & A15 & !ROMDIS2
+#           !IO_M & !RD & A14 & !ROMDIS2;
+
+/* SCC2691 UART: 0x00 - 0x3F and IO space READ or WRITE */
+CS_UART   = IO_M & !RD & !A15 & !A14
+#           IO_M & !WR & !A15 & !A14;
+
+/* W65C22 VIA: 0x40 - 0x7F and IO space READ or WRITE */
+CS_VIA    = IO_M & !RD & !A15 & A14
+#           IO_M & !WR & !A15 & A14;
+
+/* ADC0844 ADC: 0x80 - 0xCF and IO space READ or WRITE */
+CS_ADC    = IO_M & !RD & A15 & !A14
+#           IO_M & !WR & A15 & !A14;
+
+/* UART and VIA interrupt signal inverters */
+RST65 = !VIA_INT;
+RST75 = !UART_INT;
