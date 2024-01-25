@@ -29,6 +29,8 @@ Additional board space is consumed as the 8085 has a multiplexed address and dat
 
 Another design challenge is that the 8085 interrupts (if I were to use them) are active high rather than active low! 
 
+The 8085 is clocked from an 11.0592MHz crystal, which gives an actual clock of 5.5296MHz (the 8085 divides the crystal frequency by 2). I've yet to experiment to see the effects of a higher frequency.
+
 ## ROM
 
 There are quite a few ROM devices available in a PLCC package as well, but I decided to go with a Winbond W27C512 64K x 8 EEPROM in a 28-pin DIL package. There's plenty for sale on ebay too. The reason for going the DIL package route will become clear with the choice of RAM device.
@@ -85,24 +87,34 @@ The GAL files are in the code folder.
 
 # What about some code?
 
-I have 2 pieces of code that run on the RetroDuino-8085.
+I recently discovered the excellent 8085 monitor program written by [Dave Dunfield](https://dunfield.themindfactory.com/). You can find the source code to the 8085 monitor along with monitors for other micros in the MONITORS.ZIP file on Dave's website. The monitor code needs tweeking to support the specific UART hardware I am using but that simply involves providing code to initialise the UART and code to output a characher/byte as well as read in a character/byte.
 
-The first is the excellent 8085 monitor program written by [Dave Dunfield](https://dunfield.themindfactory.com/). You can find the source code to the 8085 monitor along with monitors for other micros in the MONITORS.ZIP file on Dave's website. The monitor code needs tweeking to support the specific UART hardware I am using but that simply involves providing code to initialise the UART and code to output a characher/byte as well as read in a character/byte.
+The MON85 user manual can be found in the code folder and MON85 can be assembled using the free online assembler at [ASM80.COM](https://asm80.com) - select the 8080 CPU.
 
-The second in a version of Microsoft BASIC v4.7 which I got from [Phillip Stevens github site](https://github.com/feilipu/NASCOM_BASIC_4.7).
-
-Both pieces of code have been modified to work with the SCC2691 UART. I will post them in the code folder once they have been cleaned up along with the GAL equations.
+I've modified MON85 to work with the SCC2691 UART. I have 2 versions of MON85 now:
 
 | Software | Notes |
 | :---- | :---- |
 | Mon85_ROM | Monitor runs in ROM and 48K RAM is available from 0x4000 - 0xFFFF. |
 | Mon85_RAM | Monitor runs in RAM and 64K RAM is available but the monitor resides at 0x0000 - 0x1100. |
 
+# What about some hardware / Where's the PCB ?
+
+The board folder holds the gerber files that were sent to JLCPCB to make the board. It's a 4 layer board but small enough to get it made very cheaply.
+
+The design was done using Kicad 7.0. I'm not sure exactly which files I need to share for the schematic and board layout so I've put the .kicad_pro, .kicad_sch & .kicad_sch files into the board folder. There's also the BOM as a CSV file showing the components used.
+
+# Known errors
+
+Yep, there are errors with v1.2. So far:
+* LED D2 wrong way round
+* LED D3 wrong way round
+
 # History
 * v1.2
   * Used ALE to clock the GAL rather than SYSCLK.
   * Removed the CompactFlash socket and associated passives.
-  * Used SOD to switch out the ROM.
+  * Used 8085 SOD discrete to switch out the ROM.
   * Addition of 2nd user LED.
   * Repositioning of the FTDI connector.
 * v1.1 
