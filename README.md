@@ -14,7 +14,7 @@ I've been toying with the idea of creating an 8085 based microprocessor board ar
 * [Assembly Instructions](#assembly-instructions)
 * [The 16V8 GAL](#the-16v8-gal)
 * [Software](#software)
-  - [The Monitor](#the-monitor)
+  - [The Monitor](#the-8085-monitor)
 * [PCB Files](#the-board-design-files)
 * [Known Errors](#known-errors)
 * [History](#history)
@@ -45,7 +45,7 @@ Additional board space is consumed as the 8085 has a multiplexed address and dat
 
 Another design challenge is that the 8085 interrupts (if I were to use them) are active high rather than active low! 
 
-The 8085 is clocked from an 11.0592MHz crystal, which gives an actual clock of 5.5296MHz (the 8085 divides the crystal frequency by 2). I've yet to experiment to see the effects of a higher frequency.
+The 8085 is clocked from an 11.0592MHz crystal, which gives an actual clock of 5.5296MHz (the 8085 divides the crystal frequency by 2). I've yet to experiment to see the effects of a higher frequency even though I'm exceeding the manufacturers 10MHz clock by 10% already.
 
 ## ROM
 
@@ -89,11 +89,12 @@ The thick white lines on the silkscreen just to the right of the FTDI serial por
 Assembly of the board is pretty straightforward with a few things of note.
 
 1. Solder all the small SMD resistors and capacitors first - especially on the top of the board as there is very little room once the IC sockets are fitted.
-2. Solder the microprocessor crystal and reset IC before fitting the 44-pin PLCC sockets otherwise you may find that the crystal will not fit down between the 2 44-pin PLCC sockets. 
+2. Solder the microprocessor crystal and Reset device before fitting the 44-pin PLCC sockets otherwise you may find that the crystal will not fit down between the 44-pin PLCC sockets. 
 3. Depending on the particular DIL socket(s) used for the SCC2691 UART, you may need to remove some of the plastic from the socket so that the 3.6864MHz crystal fits. I used 2 turned-pin sockets, an 8-pin and a 16-pin, to create the 24-pin socket needed. I found that the turned pin socket was less bulky than a regular socket.
 4. The 28-pin DIL socket for the W27C512 ROM needs modifying. As the RAM chip will be sitting underneath the ROM chip, I removed the 3 pieces of plastic between the 2 rows of pins - effectively creating two separate 14-pin SIL sockets.
 
 This is a photo of the RetroDuino-8085 board showing the location of the 3.6864MHz UART crystal and the modified 28-pin DIL socket.
+
 ![](./images/realboard.jpg)
 
 # The 16V8 GAL
@@ -114,7 +115,7 @@ Finally, the GAL has the ability to completely switch out the ROM to give access
 The GAL files are in the code folder.
 
 # Software
-## The Monitor
+## The 8085 Monitor 
 I recently discovered the excellent 8085 monitor program written by [Dave Dunfield](https://dunfield.themindfactory.com/). You can find the source code to the 8085 monitor along with monitors for other micros in the MONITORS.ZIP file on Dave's website. The monitor code needs tweeking to support the specific UART hardware I am using but that simply involves providing code to initialise the UART and code to output a characher/byte as well as read in a character/byte.
 
 The MON85 user manual can be found in the code folder and MON85 can be assembled using the free online assembler at [ASM80.COM](https://asm80.com) - select the 8080 CPU.
