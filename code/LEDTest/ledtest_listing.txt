@@ -1,0 +1,54 @@
+0000                             ; A simple flashing LED test program for the RetroDuino-8085
+0000                             ; The 2 LEDs toggle alternately through a simple loop
+0000                             ; 
+0000                             ; Define the locations of the registers in the 65C22 VIA in I/O space
+0000                VIABASE:   EQU   040H   
+0000                PORTA:    EQU   VIABASE+1   
+0000                PORTB:    EQU   VIABASE+0   
+0000                DDRA:     EQU   VIABASE+3   
+0000                DDRB:     EQU   VIABASE+2   
+5000                          .ORG   5000H   
+5000                             ; configure the VIA port A so that PA2 & PA3 are outputs
+5000   3E 0C                  MVI   A,0x0C   
+5002   D3 43                  OUT   DDRA   
+5004                             ; turn on LED D3 (PA3)
+5004                LOOP:        
+5004   3E 08                  MVI   A,0x08   
+5006   D3 41                  OUT   PORTA   
+5008   01 00 00               LXI   B,0   
+500B                L1:          
+500B   0D                     DCR   C   ; decrement C
+500C   C2 0B 50               JNZ   L1   
+500F   05                     DCR   B   ; decrement B
+5010   C2 0B 50               JNZ   L1   
+5013   3E 04                  MVI   A,0x04   ; toggle the LEDs
+5015   D3 41                  OUT   PORTA   
+5017   01 00 00               LXI   B,0   
+501A                L2:          
+501A   0D                     DCR   C   ; decrement C
+501B   C2 1A 50               JNZ   L2   
+501E   05                     DCR   B   ; decrement B
+501F   C2 1A 50               JNZ   L2   
+5022   C3 04 50               JMP   LOOP   
+
+
+VIABASE:            0040 DEFINED AT LINE 6
+                    > USED AT LINE 7
+                    > USED AT LINE 8
+                    > USED AT LINE 9
+                    > USED AT LINE 10
+PORTA:              0041 DEFINED AT LINE 7
+                    > USED AT LINE 20
+                    > USED AT LINE 30
+PORTB:              0040 DEFINED AT LINE 8
+DDRA:               0043 DEFINED AT LINE 9
+                    > USED AT LINE 15
+DDRB:               0042 DEFINED AT LINE 10
+LOOP:               5004 DEFINED AT LINE 18
+                    > USED AT LINE 38
+L1:                 500B DEFINED AT LINE 23
+                    > USED AT LINE 25
+                    > USED AT LINE 27
+L2:                 501A DEFINED AT LINE 32
+                    > USED AT LINE 34
+                    > USED AT LINE 36
