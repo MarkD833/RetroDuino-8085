@@ -13,6 +13,7 @@ I've been toying with the idea of creating an 8085 based microprocessor board ar
 * [Board Layout](#the-board-layout)
 * [Assembly Instructions](#assembly-instructions)
 * [The 16V8 GAL](#the-16v8-gal)
+* [Pinout](#pinout)
 * [Software](#software)
   - [The Monitor](#the-8085-monitor)
   - [Simple LED flasher](#a-simple-led-flasher)
@@ -115,6 +116,11 @@ In addition, the GAL inverts the SCC2692 and W65C22S interrupt signals.
 Finally, the GAL has the ability to completely switch out the ROM to give access to the full 64K or RAM. The 8085 SOD pin is used to control this feature.
 
 The GAL files are in the code folder.
+
+# Pinout
+Below is an image of the pinout I'm using - laid out in a similar way to the Arduino pinout diagrams found on the web.
+
+![](./images/pinout1.png)
 
 # Software
 ## The 8085 Monitor 
