@@ -27,10 +27,13 @@
 ; - Sending of LF and CR characters were reversed and are sent in the usual
 ;   order - CR first and followed by LF.
 
+; JAN 2024 - Tweaked by Mark Durham for RetroDuino-8085
+; - Serial I/O configured for Philips SCC2691 @ 9600 baud
+; - Small ROM disable routine at addr 0xFF80
 
 ROM		EQU	0x0000		; Debugger goes here
 DRAM	EQU	0xFFA0		; Debugger RAM (96 bytes required)
-
+ROMDIS	EQU	0xFF80		; MON85 ROM disable & JMP code
 ;
 ; Debugger data area (in RAM)
 ;
@@ -1729,11 +1732,12 @@ CRLF:	MVI	A,0Dh		; Carriage return
 	CALL	OUT		; Output
 	MVI	A,0Ah		; Line-feed
 ;
+;-----------------------------------------------------------
 ; User supplied I/O routines.
 ;-----------------------------------------------------------
 ; NOTE: "OUT" must appear first because "CRLF" falls into it.
 ;
-; Write character in A to console (8251 uart)
+; Write character in A to console (SCC2691 uart)
 OUT:
 	PUSH	PSW		; Save char
 OUT1:
@@ -1753,7 +1757,7 @@ IN:	IN	01h			; Get UART status
 ;
 ; Initialize the SCC2691 UART
 ; Accessed with any I/O address between 0x00 .. 0x3F
-;
+; Also place the ROM disable and JMP 0x0000 code into RAM
 INIT:
 	MVI	A,00010000b	; load the RESET MR POINTER command 
 	OUT 02h			; write to COMMAND REGISTER
@@ -1768,12 +1772,40 @@ INIT:
 	MVI	A,00000101b	; enable TX & RX
 	OUT 02h			; write to COMMAND REGISTER
 
+	; copy the 7 byte jump code into high RAM
+	
+	LXI	B,JMPCODE	; src address
+	LXI D,ROMDIS	; dest address
+	MVI	H,7			; 7 bytes to copy
+INIT1:	
+	LDAX B			; read the byte from ROM
+	STAX D			; write the byte to RAM
+	INX	B			; inc BC
+	INX D			; inc DE
+	DCR	H			; decrement byte count
+	JNZ	INIT1		; repeat till all bytes copied
+	
     LXI H,HW_MSG
     CALL PRTSTR
 	RET
 	
+;
+; This is the ROM disable and JMP code. All it does is
+; use the SIM instruction to set the SOD pin high. The
+; GAL will then switch out the ROM completely so that
+; it is no longer accessible and the full 64K of RAM is
+; available. The code then simply jumps to address 0x0000
+; and the 8085 executes whatever code it finds there.
+;
+JMPCODE:
+	MVI A,11000000b
+    SIM
+    NOP
+    JMP     0000H
+
 HW_MSG:
 	DB	0Dh,0Ah,0Dh,0Ah
-	DB	"RetroDuino-8085 SCC2691 UART - ROM Monitor Variant.",0Dh,0Ah
-	DB  "RAM is available from 0x4000 .. 0xFFFF"
+	DB	"RetroDuino-8085 SCC2691 UART - ROM Monitor 1.2a",0Dh,0Ah
+	DB  "R/W RAM : 0x4000 - 0xFFFF",0Dh,0Ah
+	DB	"ROM Disable & JMP code @ 0xFF80",0Dh,0Ah
 	DB	0Dh,0Ah,0Dh,0Ah,0

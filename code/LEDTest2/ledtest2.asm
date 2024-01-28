@@ -57,18 +57,5 @@ L2:
 
     JMP LOOP
 
-;-------------------------------------------------------------------------
-; Here's the special bit of code located high up in RAM. All it does is
-; use the SIM Instruction to set the SOD pin high. The GAL will then switch
-; out the ROM completely so that it in no longer accessible and the full 64K
-; of RAM is available.
-; The code then simply jumps to address 0x0000 and the 8085 executes whatever
-; code it finds there.
-;-------------------------------------------------------------------------
-    .ORG    0FF00H
-    MVI A,11000000b
-    SIM
-    NOP
-    JMP     0000H
     
     

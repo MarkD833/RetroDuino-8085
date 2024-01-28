@@ -49,19 +49,6 @@
 011E   05                     DCR   B   ; decrement B
 011F   C2 1A 01               JNZ   L2   
 0122   C3 04 01               JMP   LOOP   
-0125                             ;-------------------------------------------------------------------------
-0125                             ; Here's the special bit of code located high up in RAM. All it does is
-0125                             ; use the SIM Instruction to set the SOD pin high. The GAL will then switch
-0125                             ; out the ROM completely so that it in no longer accessible and the full 64K
-0125                             ; of RAM is available.
-0125                             ; The code then simply jumps to address 0x0000 and the 8085 executes whatever
-0125                             ; code it finds there.
-0125                             ;-------------------------------------------------------------------------
-FF00                          .ORG   0FF00H   
-FF00   3E C0                  MVI   A,11000000b   
-FF02   30                     SIM      
-FF03   00                     NOP      
-FF04   C3 00 00               JMP   0000H   
 
 
 VIABASE:            0040 DEFINED AT LINE 14
