@@ -1,0 +1,88 @@
+0000                             ; A simple flashing LED test program for the RetroDuino-8085
+0000                             ; The 2 LEDs toggle alternately through a simple loop
+0000                             ; 
+0000                             ; This simple code is loaded using MON85. Note that although MON85 resides in
+0000                             ; ROM starting at address 0x0000, MON85 can actually write to the RAM at address
+0000                             ; 0x0000. Any attempt to read from address 0x0000 by MON85 will result in a ROM
+0000                             ; read, not a RAM read.
+0000                             ; 
+0000                             ; To run this code, load the HEX file as normal using MON85 and then execute
+0000                             ; the special bit of code at address 0xFF00 using "g FF00".
+0000                             ; 
+0000                             ; Define the locations of the registers in the 65C22 VIA in I/O space
+0000                VIABASE:   EQU   040H   
+0000                PORTA:    EQU   VIABASE+1   
+0000                PORTB:    EQU   VIABASE+0   
+0000                DDRA:     EQU   VIABASE+3   
+0000                DDRB:     EQU   VIABASE+2   
+0000                             ;-------------------------------------------------------------------------
+0000                             ; This is the JMP instruction at address 0x0000 that jumps to our code.
+0000                             ; It will be placed in RAM at address 0x0000 by MON85.
+0000                             ;-------------------------------------------------------------------------
+0000                          .ORG   0000H   
+0000   C3 00 01               JMP   START   
+0003                             ;-------------------------------------------------------------------------
+0003                             ; Here's the actual flashing LED test code - also residing in RAM at
+0003                             ; address 0x0100.
+0003                             ;-------------------------------------------------------------------------
+0100                          .ORG   0100H   
+0100                START:       
+0100                             ; configure the VIA port A so that PA2 & PA3 are outputs
+0100   3E 0C                  MVI   A,0x0C   
+0102   D3 43                  OUT   DDRA   
+0104                             ; turn on LED D3 (PA3)
+0104                LOOP:        
+0104   3E 08                  MVI   A,0x08   
+0106   D3 41                  OUT   PORTA   
+0108   01 00 00               LXI   B,0   
+010B                L1:          
+010B   0D                     DCR   C   ; decrement C
+010C   C2 0B 01               JNZ   L1   
+010F   05                     DCR   B   ; decrement B
+0110   C2 0B 01               JNZ   L1   
+0113   3E 04                  MVI   A,0x04   ; toggle the LEDs
+0115   D3 41                  OUT   PORTA   
+0117   01 00 00               LXI   B,0   
+011A                L2:          
+011A   0D                     DCR   C   ; decrement C
+011B   C2 1A 01               JNZ   L2   
+011E   05                     DCR   B   ; decrement B
+011F   C2 1A 01               JNZ   L2   
+0122   C3 04 01               JMP   LOOP   
+0125                             ;-------------------------------------------------------------------------
+0125                             ; Here's the special bit of code located high up in RAM. All it does is
+0125                             ; use the SIM Instruction to set the SOD pin high. The GAL will then switch
+0125                             ; out the ROM completely so that it in no longer accessible and the full 64K
+0125                             ; of RAM is available.
+0125                             ; The code then simply jumps to address 0x0000 and the 8085 executes whatever
+0125                             ; code it finds there.
+0125                             ;-------------------------------------------------------------------------
+FF00                          .ORG   0FF00H   
+FF00   3E C0                  MVI   A,11000000b   
+FF02   30                     SIM      
+FF03   00                     NOP      
+FF04   C3 00 00               JMP   0000H   
+
+
+VIABASE:            0040 DEFINED AT LINE 14
+                    > USED AT LINE 15
+                    > USED AT LINE 16
+                    > USED AT LINE 17
+                    > USED AT LINE 18
+PORTA:              0041 DEFINED AT LINE 15
+                    > USED AT LINE 40
+                    > USED AT LINE 50
+PORTB:              0040 DEFINED AT LINE 16
+DDRA:               0043 DEFINED AT LINE 17
+                    > USED AT LINE 35
+DDRB:               0042 DEFINED AT LINE 18
+START:              0100 DEFINED AT LINE 32
+                    > USED AT LINE 25
+LOOP:               0104 DEFINED AT LINE 38
+                    > USED AT LINE 58
+L1:                 010B DEFINED AT LINE 43
+                    > USED AT LINE 45
+                    > USED AT LINE 47
+L2:                 011A DEFINED AT LINE 52
+                    > USED AT LINE 54
+                    > USED AT LINE 56
