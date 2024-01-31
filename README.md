@@ -133,8 +133,8 @@ I've modified MON85 to work with the SCC2691 UART such that there are 2 versions
 
 | Software | Notes |
 | :---- | :---- |
-| Mon85_ROM | Monitor runs in ROM and 48K RAM is available from 0x4000 - 0xFFFF. |
-| Mon85_RAM | Monitor runs in RAM and the whole 64K RAM is available but the monitor resides at 0x0000 - 0x1100. |
+| MON85_ROM | Monitor runs in ROM and 48K RAM is available from 0x4000 - 0xFFFF. |
+| MON85_RAM | Monitor runs in RAM and the whole 64K RAM is available but the monitor resides at 0x0000 - 0x1100. |
 
 In addition, the MON85_ROM version has a small tweak. During initialisation, a small piece of code is copied from the ROM into RAM starting at address 0xFF80. Executing the code from MON85 with a "g FF80" command will disable the ROM (and MON85) and execute code starting at address 0x0000.
   
