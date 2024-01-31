@@ -24,9 +24,7 @@ The LEDTest2 folder contains the same simple LED flashing code as above, BUT dem
 
 The MON85 monitor resides in ROM starting at address 0x0000. The downside of this is usually that you cannot put your own interrupt handlers there as it's Read Only. However, with the RetroDuino-8085 design, you can!
 
-The LEDTest2 code is split across 2 pieces of memory.
-
-At address 0x0000 there is a JMP instruction to the start of the LEDTest code. The LEDTest code is located at address 0x0500. Even though the MON85 ROM resides in this area, MON85 can actually write to the RAM at the same address - it just can't read from that RAM. Any attempt to read from this area will read the ROM - i.e MON85.
+Using the MON85 L command, load the LEDTest2 Intel-HEX file. This will load the LED flashing code into RAM at address 0x0000. Even though the MON85 ROM resides in this area, MON85 can actually write to the RAM at the same address - it just can't read from that RAM. Any attempt to read from this area will read the ROM - i.e MON85.
 
 In order to run the code, give MON85 the command "g FF80". There is a small piece of code that is pre-loaded by MON85 that resides at this address. This simple bit of code sets the 8085 SOD pin high - switching out the MON85 ROM completely - and then jumps to address 0x0000 to execute whatever code it finds there.
 
@@ -39,5 +37,6 @@ The downside is that once the ROM is switched out, you loose all the MON85 capab
 ## A Simple Hello
 I've figured out how to use the [z88dk](https://z88dk.org/site/) suite to create some code for the RetroDuino-8085. I'm completely new to the z88dk tools so look away now if you've already got experience of using z88dk as what follows might not be pretty! Expect dragons!
 
-The traditional ["Hello World"](https://en.wikipedia.org/wiki/%22Hello,_World!%22_program) code was created by following the [Classic Homebrew](https://github.com/z88dk/z88dk/wiki/Classic--Homebrew) hardware quick start guide and includes console input. As the RetroDuino-8085 can run code from address 0x0000, I've also got a basic crt0 file as well. It's all in the simple_heelo folder along with the batch file I used to build the code.
+The traditional ["Hello World"](https://en.wikipedia.org/wiki/%22Hello,_World!%22_program) code was created by following the [Classic Homebrew](https://github.com/z88dk/z88dk/wiki/Classic--Homebrew) hardware quick start guide and includes console input. As the RetroDuino-8085 can run code from address 0x0000, I've also got a basic crt0 file as well. It's all in the simple_hello folder along with the batch file I used to build the code.
 
+Use the MON85 L command to load the Intel-HEX file and then give MON85 the command "g FF80" to switch out the ROM and run the code.
