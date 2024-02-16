@@ -93,6 +93,7 @@ Assembly of the board is pretty straightforward with a few things of note.
 2. Solder the microprocessor crystal and Reset device before fitting the 44-pin PLCC sockets otherwise you may find that the crystal will not fit down between the 44-pin PLCC sockets. 
 3. Depending on the particular DIL socket(s) used for the SCC2691 UART, you may need to remove some of the plastic from the socket so that the 3.6864MHz crystal fits. I used 2 turned-pin sockets, an 8-pin and a 16-pin, to create the 24-pin socket needed. I found that the turned pin socket was less bulky than a regular socket.
 4. The 28-pin DIL socket for the W27C512 ROM needs modifying. As the RAM chip will be sitting underneath the ROM chip, I removed the 3 pieces of plastic between the 2 rows of pins - effectively creating two separate 14-pin SIL sockets.
+5. Lastly, solder the 4 SIL sockets. These pretty much seal off the top of the board for any further access with a soldering iron, so make sure that the board works before fitting thse. 
 
 This is a photo of the RetroDuino-8085 board showing the location of the 3.6864MHz UART crystal and the modified 28-pin DIL socket.
 
