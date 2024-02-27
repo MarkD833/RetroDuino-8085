@@ -40,3 +40,18 @@ I've figured out how to use the [z88dk](https://z88dk.org/site/) suite to create
 The traditional ["Hello World"](https://en.wikipedia.org/wiki/%22Hello,_World!%22_program) code was created by following the [Classic Homebrew](https://github.com/z88dk/z88dk/wiki/Classic--Homebrew) hardware quick start guide and includes console input. As the RetroDuino-8085 can run code from address 0x0000, I've also got a basic crt0 file as well. It's all in the simple_hello folder along with the batch file I used to build the code.
 
 Use the MON85 L command to load the Intel-HEX file and then give MON85 the command "g FF80" to switch out the ROM and run the code.
+
+## Some more useful software
+After a bit of experimentaion, I now have a software SPI interface and a software I2C interface. The code is in the z88dk spi-i2c folder.
+
+There's a sys folder now that includes the following:
+| File | Description |
+| :---- | :---- |
+| hardware.c | c source file that handles SPI, I2C & the UART timer |
+| hardware.h | function prototypes |
+| low_level.asm | low level assembler functions
+| rd85_crt0.asm | startup code for the RetroDuino-8085|
+
+I've also included 3 example programs - main_timer.c, main_spi.c and main_i2c.c which show how to use the software SPI, software I2C and the system tick (currently set to increment every 20mS).
+
+Rename the main_*.c file to simply main.c and the build script should work to demonstrate SPI, I2C or system tick. 
